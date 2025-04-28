@@ -1,0 +1,556 @@
+import tkinter as tk
+from tkinter import ttk
+from tkinter import messagebox
+from tkinter import filedialog
+from tkinter import simpledialog
+import sqlite3
+import datetime
+import os
+from collections import defaultdict
+import random
+from datetime import timedelta
+
+# --- Dependency Imports & Checks ---
+try:
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    matplotlib.use('TkAgg')
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    print("Warning: Matplotlib not found. Graphing functionality will be disabled.")
+    print("Install it using: pip install matplotlib")
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    print("Warning: Pandas not found. Some graphing functionality will be disabled.")
+    print("Install it using: pip install pandas")
+
+try:
+    import seaborn as sns
+    SEABORN_AVAILABLE = True
+except ImportError:
+    SEABORN_AVAILABLE = False
+    print("Warning: Seaborn not found. Heatmap graph will be disabled.")
+    print("Install it using: pip install seaborn")
+
+ALL_GRAPH_DEPS_AVAILABLE = MATPLOTLIB_AVAILABLE and PANDAS_AVAILABLE
+HEATMAP_DEPS_AVAILABLE = ALL_GRAPH_DEPS_AVAILABLE and SEABORN_AVAILABLE
+
+
+# --- Constants ---
+DB_NAME = "game_records.db"
+PLAYER_NAMES = (
+    "",
+    "Greg Smith", "Thao Smith", "Matt Canik", "Joe South", "Alan South",
+    "Bob Rivard", "Elon Musk", "Ada Lovelace", "Grace Hopper",
+    "Linus Torvalds", "Guido van Rossum"
+)
+MIN_GAMES_FOR_BOXPLOT = 3
+FILE_7_LETTER = "7-letter-list.txt" # Word list file names
+FILE_8_LETTER = "8-letter-list.txt"
+
+# --- Load Word Lists ---
+def load_word_list(filename):
+    """Loads words from a file, strips whitespace, converts to uppercase."""
+    words = []
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            words = [line.strip().upper() for line in f if line.strip()]
+        print(f"Successfully loaded {len(words)} words from {filename}.")
+    except FileNotFoundError:
+        print(f"Error: Word list file not found: {filename}")
+    except Exception as e:
+        print(f"Error reading {filename}: {e}")
+    return words
+
+WORD_LIST_7 = load_word_list(FILE_7_LETTER)
+WORD_LIST_8 = load_word_list(FILE_8_LETTER)
+COMBINED_WORD_LIST = WORD_LIST_7 + WORD_LIST_8
+
+if not COMBINED_WORD_LIST:
+    print("Warning: No words loaded from files. Test data bingos will be empty.")
+
+# --- Database Setup ---
+def setup_database():
+    """Creates the database and table with the correct schema if they don't exist."""
+    conn = None
+    try:
+        db_exists = os.path.exists(DB_NAME)
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS games (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_date TEXT NOT NULL,
+                player1_name TEXT,
+                player1_score INTEGER,
+                player1_bingos TEXT,
+                player2_name TEXT,
+                player2_score INTEGER,
+                player2_bingos TEXT
+            )
+        ''')
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Database error during setup: {e}")
+        messagebox.showerror("Database Error", f"Could not set up database: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+# --- Test Data Generation Function ---
+def generate_test_data(num_records=50):
+    """Generates random game records using existing player names and word lists."""
+    print(f"Attempting to generate {num_records} test records...")
+    valid_player_names = [name for name in PLAYER_NAMES if name]
+
+    if len(valid_player_names) < 2:
+        print("Error: Need at least 2 valid player names in PLAYER_NAMES.")
+        return
+
+    # Use the globally loaded word list
+    available_words = COMBINED_WORD_LIST
+    can_generate_bingos = bool(available_words) # Check if list is not empty
+
+    conn = None
+    added_count = 0
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        today = datetime.date.today()
+
+        for i in range(num_records):
+            game_date = (today - timedelta(days=random.randint(0, 730))).strftime('%Y-%m-%d')
+            p1_name, p2_name = random.sample(valid_player_names, 2)
+            p1_score = random.randint(275, 550)
+            p2_score = random.randint(275, 550)
+
+            # Generate Bingos for Player 1
+            p1_bingos_list = []
+            if can_generate_bingos:
+                num_bingos_p1 = random.randint(0, 4)
+                # Ensure we don't try to sample more words than available
+                k = min(num_bingos_p1, len(available_words))
+                if k > 0:
+                    p1_bingos_list = random.sample(available_words, k)
+            p1_bingos_str = ", ".join(p1_bingos_list)
+
+            # Generate Bingos for Player 2
+            p2_bingos_list = []
+            if can_generate_bingos:
+                num_bingos_p2 = random.randint(0, 4)
+                k = min(num_bingos_p2, len(available_words))
+                if k > 0:
+                    p2_bingos_list = random.sample(available_words, k)
+            p2_bingos_str = ", ".join(p2_bingos_list)
+
+            # Insert the record with potentially generated bingos
+            cursor.execute('''
+                INSERT INTO games (game_date, player1_name, player1_score, player1_bingos,
+                                   player2_name, player2_score, player2_bingos)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (game_date, p1_name, p1_score, p1_bingos_str, p2_name, p2_score, p2_bingos_str))
+            added_count += 1
+
+        conn.commit()
+        print(f"Successfully generated and added {added_count} test records.")
+
+    except sqlite3.Error as e:
+        print(f"Database error during test data generation: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during test data generation: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+
+# --- Main Application Class ---
+class GameRecorderApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Game Score Recorder")
+
+        # --- Main Frame ---
+        main_frame = ttk.Frame(root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=2)
+
+        # --- Input Fields Frame ---
+        input_frame = ttk.Frame(main_frame)
+        input_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        input_frame.columnconfigure(1, weight=1)
+
+        current_row = 0
+        # Date
+        ttk.Label(input_frame, text="Date:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.date_entry = ttk.Entry(input_frame, width=40)
+        self.date_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
+        self.date_entry.insert(0, datetime.date.today().strftime('%Y-%m-%d'))
+        current_row += 1
+        # Player 1 Name
+        ttk.Label(input_frame, text="Player 1 Name:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p1_name_combo = ttk.Combobox(input_frame, width=38, values=PLAYER_NAMES, state='readonly')
+        self.p1_name_combo.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
+        self.p1_name_combo.current(0)
+        current_row += 1
+        # Player 1 Score
+        ttk.Label(input_frame, text="Player 1 Score:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p1_score_entry = ttk.Entry(input_frame, width=15)
+        self.p1_score_entry.grid(row=current_row, column=1, sticky=tk.W, pady=2, padx=5)
+        current_row += 1
+        # Player 1 Bingos
+        ttk.Label(input_frame, text="Player 1 Bingos:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p1_bingos_entry = ttk.Entry(input_frame, width=40)
+        self.p1_bingos_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
+        current_row += 1
+        # Player 2 Name
+        ttk.Label(input_frame, text="Player 2 Name:").grid(row=current_row, column=0, sticky=tk.W, pady=(10, 2), padx=5)
+        self.p2_name_combo = ttk.Combobox(input_frame, width=38, values=PLAYER_NAMES, state='readonly')
+        self.p2_name_combo.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(10, 2), padx=5)
+        self.p2_name_combo.current(0)
+        current_row += 1
+        # Player 2 Score
+        ttk.Label(input_frame, text="Player 2 Score:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p2_score_entry = ttk.Entry(input_frame, width=15)
+        self.p2_score_entry.grid(row=current_row, column=1, sticky=tk.W, pady=2, padx=5)
+        current_row += 1
+        # Player 2 Bingos
+        ttk.Label(input_frame, text="Player 2 Bingos:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p2_bingos_entry = ttk.Entry(input_frame, width=40)
+        self.p2_bingos_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
+        current_row += 1
+
+        # --- Graphs Frame ---
+        graphs_frame = ttk.LabelFrame(main_frame, text="Generate Graphs", padding="10")
+        graphs_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
+        graphs_frame.columnconfigure(0, weight=1)
+        graphs_frame.columnconfigure(1, weight=1)
+
+        graph_state = tk.NORMAL if ALL_GRAPH_DEPS_AVAILABLE else tk.DISABLED
+        heatmap_state = tk.NORMAL if HEATMAP_DEPS_AVAILABLE else tk.DISABLED
+
+        self.boxplot_button = ttk.Button(graphs_frame, text="Score Distribution (Box Plot)",
+                                         command=self.show_score_distribution_boxplot, state=graph_state)
+        self.boxplot_button.grid(row=0, column=0, pady=3, padx=5, sticky=tk.EW)
+        self.trend_button = ttk.Button(graphs_frame, text="Player Score Trend (Line)",
+                                       command=self.prompt_and_show_score_trend, state=graph_state)
+        self.trend_button.grid(row=0, column=1, pady=3, padx=5, sticky=tk.EW)
+        self.heatmap_button = ttk.Button(graphs_frame, text="Head-to-Head Matrix (Heatmap)",
+                                         command=self.show_h2h_heatmap, state=heatmap_state)
+        self.heatmap_button.grid(row=1, column=0, pady=3, padx=5, sticky=tk.EW)
+        self.comp_button = ttk.Button(graphs_frame, text="Game Competitiveness Trend",
+                                      command=self.show_competitiveness_trend, state=graph_state)
+        self.comp_button.grid(row=1, column=1, pady=3, padx=5, sticky=tk.EW)
+
+        # --- Action Buttons Frame ---
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=2, column=0, columnspan=2, pady=(5, 5), sticky=tk.EW)
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+
+        self.add_record_button = ttk.Button(button_frame, text="Add Record", command=self.save_record)
+        self.add_record_button.grid(row=0, column=0, sticky=tk.E, padx=5)
+        self.print_button = ttk.Button(button_frame, text="Save Report to File", command=self.print_records_to_file)
+        self.print_button.grid(row=0, column=1, sticky=tk.W, padx=5)
+
+        # --- Status Label ---
+        self.status_label = ttk.Label(main_frame, text="")
+        self.status_label.grid(row=3, column=0, columnspan=2, pady=(5, 0), sticky=tk.EW)
+
+    # --- Data Fetching Helper ---
+    def _fetch_game_data(self, columns="*", order_by=None):
+        """Helper to fetch specified columns from the games table, optionally ordered."""
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            safe_columns = "*"
+            if columns != "*":
+                 validated_cols = [col.strip() for col in columns.split(',') if col.strip().replace('_','').isalnum()]
+                 if validated_cols: safe_columns = ", ".join(validated_cols)
+            query = f"SELECT {safe_columns} FROM games"
+            if order_by:
+                safe_order_by = "".join(c for c in order_by if c.isalnum() or c in ['_', ',', ' ']).strip()
+                if safe_order_by and not any(kw in safe_order_by.upper() for kw in ['--', ';', 'DROP', 'INSERT', 'UPDATE', 'DELETE']):
+                     query += f" ORDER BY {safe_order_by}"
+                else: print(f"Warning: Invalid characters detected in ORDER BY clause: {order_by}")
+            cursor.execute(query)
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Could not fetch game data: {e}")
+            self.status_label.config(text=f"DB Fetch Error: {e}", foreground="red")
+            print(f"Database error during fetch: {e}")
+            return None
+        finally:
+            if conn: conn.close()
+
+    # --- Core Methods ---
+    def save_record(self):
+        """Gathers data from fields and saves it to the SQLite database."""
+        game_date = self.date_entry.get().strip()
+        p1_name = self.p1_name_combo.get()
+        p1_score_str = self.p1_score_entry.get().strip()
+        p1_bingos_raw = self.p1_bingos_entry.get().strip()
+        p2_name = self.p2_name_combo.get()
+        p2_score_str = self.p2_score_entry.get().strip()
+        p2_bingos_raw = self.p2_bingos_entry.get().strip()
+
+        if not game_date: messagebox.showerror("Input Error", "Date cannot be empty."); self.status_label.config(text="Error: Date missing.", foreground="red"); return
+        if not p1_name: messagebox.showerror("Input Error", "Player 1 Name cannot be empty."); self.status_label.config(text="Error: Player 1 Name missing.", foreground="red"); return
+        if not p2_name: messagebox.showerror("Input Error", "Player 2 Name cannot be empty."); self.status_label.config(text="Error: Player 2 Name missing.", foreground="red"); return
+        if p1_name == p2_name: messagebox.showwarning("Input Warning", "Player 1 and Player 2 cannot be the same."); self.status_label.config(text="Warning: Players are the same.", foreground="orange"); return
+
+        try:
+            p1_score = int(p1_score_str) if p1_score_str else 0
+            p2_score = int(p2_score_str) if p2_score_str else 0
+        except ValueError: messagebox.showerror("Input Error", "Scores must be valid numbers."); self.status_label.config(text="Error: Invalid score.", foreground="red"); return
+
+        # Process manually entered bingos
+        p1_bingos_list = [word.strip().upper() for word in p1_bingos_raw.split(',') if word.strip()]
+        p1_bingos_str = ", ".join(p1_bingos_list)
+        p2_bingos_list = [word.strip().upper() for word in p2_bingos_raw.split(',') if word.strip()]
+        p2_bingos_str = ", ".join(p2_bingos_list)
+
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO games (game_date, player1_name, player1_score, player1_bingos,
+                                   player2_name, player2_score, player2_bingos)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (game_date, p1_name, p1_score, p1_bingos_str,
+                  p2_name, p2_score, p2_bingos_str))
+            conn.commit()
+            self.status_label.config(text="Record added successfully!", foreground="green")
+            print(f"Record Added: {game_date}, P1: {p1_name}({p1_score}), P2: {p2_name}({p2_score})")
+            self.clear_fields()
+        except sqlite3.Error as e: messagebox.showerror("Database Error", f"Could not save record: {e}"); print(f"DB insert error: {e}"); self.status_label.config(text=f"Error saving: {e}", foreground="red")
+        finally:
+            if conn: conn.close()
+
+    def clear_fields(self):
+        """Clears all input fields for the next entry."""
+        self.date_entry.delete(0, tk.END)
+        self.date_entry.insert(0, datetime.date.today().strftime('%Y-%m-%d'))
+        self.p1_name_combo.current(0)
+        self.p1_score_entry.delete(0, tk.END)
+        self.p1_bingos_entry.delete(0, tk.END)
+        self.p2_name_combo.current(0)
+        self.p2_score_entry.delete(0, tk.END)
+        self.p2_bingos_entry.delete(0, tk.END)
+        self.status_label.config(text="")
+
+    def print_records_to_file(self):
+        """Fetches records, calculates stats (incl. H2H), prompts for filename, and saves report."""
+        default_filename = f"game_records_{datetime.date.today().strftime('%Y-%m-%d')}.txt"
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+            initialfile=default_filename, title="Save Game Report As"
+        )
+        if not filepath: self.status_label.config(text="Save cancelled.", foreground="orange"); return
+
+        print(f"Attempting to save report to: {filepath}")
+        records = self._fetch_game_data(
+            columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos",
+            order_by="game_date DESC, id DESC"
+        )
+        if records is None: return
+        if not records: messagebox.showinfo("No Records", "No records to save."); self.status_label.config(text="No records found.", foreground="blue"); return
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(f"Game Records Report - Generated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 100 + "\n")
+                f.write("\n--- All Game Records ---\n\n")
+                header = f"{'ID':<4} {'Date':<12} {'Player 1':<18} {'Score':<6} {'P1 Bingos':<25} {'Player 2':<18} {'Score':<6} {'P2 Bingos':<25}\n"
+                f.write(header); f.write("-" * len(header.strip()) + "\n")
+                for row in records:
+                    p1b_str = (row[4][:23] + '..') if row[4] and len(row[4]) > 25 else row[4]
+                    p2b_str = (row[7][:23] + '..') if row[7] and len(row[7]) > 25 else row[7]
+                    f.write(f"{row[0]:<4} {row[1]:<12} {row[2]:<18} {row[3]:<6} {p1b_str if p1b_str else '':<25} {row[5]:<18} {row[6]:<6} {p2b_str if p2b_str else '':<25}\n")
+                f.write("-" * len(header.strip()) + "\n"); f.write(f"Total game records listed: {len(records)}\n\n")
+
+                player_stats = defaultdict(lambda: [0, 0, 0]); h2h_stats = defaultdict(lambda: [0, 0])
+                for row in records:
+                    p1_name, p1_score, p2_name, p2_score = row[2], row[3], row[5], row[6]
+                    if not p1_name or not p2_name: continue
+                    p1_wins_h2h = None
+                    if p1_score > p2_score: player_stats[p1_name][0] += 1; player_stats[p2_name][1] += 1; p1_wins_h2h = True
+                    elif p2_score > p1_score: player_stats[p2_name][0] += 1; player_stats[p1_name][1] += 1; p1_wins_h2h = False
+                    else: player_stats[p1_name][2] += 1; player_stats[p2_name][2] += 1
+                    if p1_wins_h2h is not None:
+                        player_a, player_b = sorted((p1_name, p2_name)); matchup_key = (player_a, player_b)
+                        if p1_wins_h2h: h2h_stats[matchup_key][0 if p1_name == player_a else 1] += 1
+                        else: h2h_stats[matchup_key][0 if p2_name == player_a else 1] += 1
+
+                stats_list = list(player_stats.items())
+                def get_win_percentage(stats): wins, losses = stats[0], stats[1]; total = wins + losses; return wins / total if total > 0 else 0.0
+                stats_list.sort(key=lambda item: item[0]); stats_list.sort(key=lambda item: item[1][0], reverse=True); stats_list.sort(key=lambda item: get_win_percentage(item[1]), reverse=True)
+                f.write("\n--- Player Win/Loss Records (Sorted) ---\n\n")
+                stats_header = f"{'Player':<20} {'Wins':<6} {'Losses':<7} {'Ties':<6} {'Win %':<7}\n"
+                f.write(stats_header); f.write("-" * len(stats_header.strip()) + "\n")
+                for name, stats in stats_list: wins, losses, ties = stats; win_pct = get_win_percentage(stats); f.write(f"{name:<20} {wins:<6} {losses:<7} {ties:<6} {win_pct:<7.1%}\n")
+                f.write("-" * len(stats_header.strip()) + "\n")
+
+                f.write("\n--- Head-to-Head Records ---\n\n")
+                sorted_h2h = sorted(h2h_stats.items())
+                if not sorted_h2h: f.write("No head-to-head matchups found.\n")
+                else:
+                    max_name_len = max(len(p) for p_tuple in h2h_stats.keys() for p in p_tuple) if h2h_stats else 20
+                    max_name_len = max(20, max_name_len)
+                    h2h_header = f"{'Player A':<{max_name_len}} vs {'Player B':<{max_name_len}} : {'Score (A-B)'}\n"
+                    f.write(h2h_header); f.write("-" * len(h2h_header.strip()) + "\n")
+                    for (player_a, player_b), (wins_a, wins_b) in sorted_h2h: f.write(f"{player_a:<{max_name_len}} vs {player_b:<{max_name_len}} : {wins_a:>4} - {wins_b:<4}\n")
+                    f.write("-" * len(h2h_header.strip()) + "\n")
+
+            self.status_label.config(text=f"Report saved successfully.", foreground="green")
+            print(f"Successfully saved report to {filepath}")
+            messagebox.showinfo("Save Successful", f"Report saved to:\n{filepath}")
+        except IOError as e: messagebox.showerror("File Error", f"Could not write file: {e}"); print(f"File error: {e}"); self.status_label.config(text=f"File Error: {e}", foreground="red")
+        except Exception as e: messagebox.showerror("Error", f"An unexpected error during report generation: {e}"); print(f"Report generation error: {e}"); self.status_label.config(text=f"Report Error: {e}", foreground="red")
+
+    # --- Graphing Methods ---
+    def _check_graph_deps(self, require_seaborn=False):
+        """Checks if necessary graphing libraries are available."""
+        if not MATPLOTLIB_AVAILABLE: messagebox.showerror("Graphing Error", "Matplotlib library is not installed."); return False
+        if not PANDAS_AVAILABLE: messagebox.showerror("Graphing Error", "Pandas library is not installed."); return False
+        if require_seaborn and not SEABORN_AVAILABLE: messagebox.showerror("Graphing Error", "Seaborn library is not installed."); return False
+        return True
+
+    def show_score_distribution_boxplot(self):
+        """Graph 1: Player Score Distribution (Box Plot)"""
+        if not self._check_graph_deps(): return
+        print("Generating score distribution box plot...")
+        self.status_label.config(text="Generating box plot...", foreground="blue")
+        records = self._fetch_game_data("player1_name, player1_score, player2_name, player2_score")
+        if records is None or not records: messagebox.showinfo("No Data", "No game records found."); self.status_label.config(text="No records for graph.", foreground="blue"); return
+        try:
+            scores_by_player = defaultdict(list)
+            for p1n, p1s, p2n, p2s in records:
+                if p1n and p1s is not None: scores_by_player[p1n].append(p1s)
+                if p2n and p2s is not None: scores_by_player[p2n].append(p2s)
+            filtered_scores = {name: scores for name, scores in scores_by_player.items() if len(scores) >= MIN_GAMES_FOR_BOXPLOT}
+            if not filtered_scores: messagebox.showinfo("Insufficient Data", f"No players found with at least {MIN_GAMES_FOR_BOXPLOT} games."); self.status_label.config(text="Insufficient data.", foreground="blue"); return
+            sorted_player_names = sorted(filtered_scores.keys())
+            data_to_plot = [filtered_scores[name] for name in sorted_player_names]
+            plt.style.use('seaborn-v0_8-darkgrid')
+            fig, ax = plt.subplots(figsize=(12, 7))
+            ax.boxplot(data_to_plot, tick_labels=sorted_player_names, showmeans=True) # Use tick_labels
+            ax.set_xlabel("Player"); ax.set_ylabel("Score"); ax.set_title(f"Player Score Distribution (Min. {MIN_GAMES_FOR_BOXPLOT} Games)")
+            plt.xticks(rotation=45, ha='right'); plt.tight_layout(); plt.show()
+            self.status_label.config(text="Box plot generated.", foreground="blue"); print("Box plot displayed.")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating box plot: {e}"); self.status_label.config(text=f"Box Plot Error: {e}", foreground="red"); print(f"Box plot error: {e}")
+
+    def prompt_and_show_score_trend(self):
+        """Graph 2: Player Score Trend Over Time (Line Chart) - Prompts for player"""
+        if not self._check_graph_deps(): return
+        print("Prompting for player score trend..."); self.status_label.config(text="Select player for trend...", foreground="blue")
+        records = self._fetch_game_data("player1_name, player2_name")
+        if records is None or not records: messagebox.showinfo("No Data", "No game records found."); self.status_label.config(text="No records found.", foreground="blue"); return
+        players = set(p for p1n, p2n in records for p in (p1n, p2n) if p)
+        if not players: messagebox.showinfo("No Data", "No valid player names found."); self.status_label.config(text="No players found.", foreground="blue"); return
+        sorted_players = sorted(list(players))
+        player_to_plot = simpledialog.askstring("Select Player", "Enter player name for score trend:\n(Case Sensitive)\n\nAvailable:\n" + "\n".join(sorted_players), parent=self.root)
+        if not player_to_plot: self.status_label.config(text="Trend graph cancelled.", foreground="orange"); return
+        if player_to_plot not in players: messagebox.showerror("Invalid Player", f"Player '{player_to_plot}' not found."); self.status_label.config(text="Invalid player selected.", foreground="red"); return
+        print(f"Generating score trend for {player_to_plot}..."); self.status_label.config(text=f"Generating trend for {player_to_plot}...", foreground="blue")
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("SELECT game_date, player1_score FROM games WHERE player1_name = ? UNION ALL SELECT game_date, player2_score FROM games WHERE player2_name = ? ORDER BY game_date ASC", (player_to_plot, player_to_plot))
+            player_data = cursor.fetchall()
+            if not player_data: messagebox.showinfo("No Data", f"No scores found for player '{player_to_plot}'."); self.status_label.config(text=f"No data for {player_to_plot}.", foreground="blue"); return
+            df = pd.DataFrame(player_data, columns=['Date', 'Score'])
+            df['Score'] = pd.to_numeric(df['Score'], errors='coerce'); df['Date'] = pd.to_datetime(df['Date']); df = df.sort_values(by='Date')
+            rolling_avg = df['Score'].rolling(window=5, min_periods=1).mean()
+            plt.style.use('seaborn-v0_8-darkgrid'); fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(df['Date'], df['Score'], marker='o', linestyle='-', label='Actual Score', alpha=0.7)
+            ax.plot(df['Date'], rolling_avg, marker='', linestyle='--', color='red', label='5-Game Rolling Avg')
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d')); ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=10)); fig.autofmt_xdate()
+            ax.set_xlabel("Game Date"); ax.set_ylabel("Score"); ax.set_title(f"Score Trend for {player_to_plot}"); ax.legend(); ax.grid(True); plt.tight_layout(); plt.show()
+            self.status_label.config(text=f"Trend graph for {player_to_plot} generated.", foreground="blue"); print(f"Trend graph for {player_to_plot} displayed.")
+        except sqlite3.Error as e: messagebox.showerror("Database Error", f"Could not fetch trend data: {e}"); self.status_label.config(text=f"DB Error (Trend): {e}", foreground="red"); print(f"DB error fetching trend data: {e}")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating trend graph: {e}"); self.status_label.config(text=f"Trend Graph Error: {e}", foreground="red"); print(f"Trend graph error: {e}")
+        finally:
+            if conn: conn.close()
+
+    def show_h2h_heatmap(self):
+        """Graph 3: Head-to-Head Win Matrix (Heatmap)"""
+        if not self._check_graph_deps(require_seaborn=True): return
+        print("Generating H2H heatmap..."); self.status_label.config(text="Generating H2H heatmap...", foreground="blue")
+        records = self._fetch_game_data("player1_name, player1_score, player2_name, player2_score")
+        if records is None or not records: messagebox.showinfo("No Data", "No game records found."); self.status_label.config(text="No records for heatmap.", foreground="blue"); return
+        try:
+            h2h_wins = defaultdict(lambda: defaultdict(int)); games_played = defaultdict(lambda: defaultdict(int)); players = set()
+            for p1n, p1s, p2n, p2s in records:
+                if not p1n or not p2n or p1s is None or p2s is None: continue
+                players.add(p1n); players.add(p2n); games_played[p1n][p2n] += 1; games_played[p2n][p1n] += 1
+                if p1s > p2s: h2h_wins[p1n][p2n] += 1
+                elif p2s > p1s: h2h_wins[p2n][p1n] += 1
+            if len(players) < 2: messagebox.showinfo("Insufficient Data", "Need >= 2 players with games between them."); self.status_label.config(text="Insufficient data.", foreground="blue"); return
+            sorted_players = sorted(list(players)); win_pct_matrix = pd.DataFrame(index=sorted_players, columns=sorted_players, dtype=float)
+            for p1 in sorted_players:
+                for p2 in sorted_players:
+                    if p1 == p2: win_pct_matrix.loc[p1, p2] = pd.NA; continue
+                    p1_vs_p2_wins = h2h_wins[p1][p2]; p2_vs_p1_wins = h2h_wins[p2][p1]; total_non_tie_games = p1_vs_p2_wins + p2_vs_p1_wins
+                    win_pct_matrix.loc[p1, p2] = p1_vs_p2_wins / total_non_tie_games if total_non_tie_games > 0 else pd.NA
+            plt.style.use('seaborn-v0_8-darkgrid') # Corrected style name
+            plt.figure(figsize=(max(8, len(sorted_players)*0.8), max(6, len(sorted_players)*0.6)))
+            sns.heatmap(win_pct_matrix, annot=True, fmt=".1%", cmap="coolwarm_r", linewidths=.5, linecolor='lightgray', cbar_kws={'label': 'Win % (Row vs Col)'}, annot_kws={"size": 8})
+            plt.title("Head-to-Head Win Percentage Matrix"); plt.xlabel("Opponent"); plt.ylabel("Player"); plt.xticks(rotation=45, ha='right'); plt.yticks(rotation=0); plt.tight_layout(); plt.show()
+            self.status_label.config(text="H2H heatmap generated.", foreground="blue"); print("H2H heatmap displayed.")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating heatmap: {e}"); self.status_label.config(text=f"Heatmap Error: {e}", foreground="red"); print(f"Heatmap error: {e}")
+
+    def show_competitiveness_trend(self):
+        """Graph 4: Game Competitiveness Over Time (Scatter/Line)"""
+        if not self._check_graph_deps(): return
+        print("Generating competitiveness trend graph..."); self.status_label.config(text="Generating competitiveness trend...", foreground="blue")
+        records = self._fetch_game_data("game_date, player1_score, player2_score")
+        if records is None or not records: messagebox.showinfo("No Data", "No game records found."); self.status_label.config(text="No records for comp. trend.", foreground="blue"); return
+        try:
+            competitiveness_data = []
+            for date_str, p1s, p2s in records:
+                if p1s is not None and p2s is not None:
+                    try: date_obj = datetime.datetime.strptime(date_str, '%Y-%m-%d').date(); score_diff = abs(p1s - p2s); competitiveness_data.append({'Date': date_obj, 'Score Difference': score_diff})
+                    except ValueError: print(f"Skipping record with invalid date format: {date_str}"); continue
+            if not competitiveness_data: messagebox.showinfo("No Data", "No valid game data found."); self.status_label.config(text="No valid data.", foreground="blue"); return
+            df = pd.DataFrame(competitiveness_data); df = df.sort_values(by='Date')
+            rolling_avg_diff = df['Score Difference'].rolling(window=10, min_periods=1).mean()
+            plt.style.use('seaborn-v0_8-darkgrid'); fig, ax = plt.subplots(figsize=(12, 6))
+            ax.scatter(df['Date'], df['Score Difference'], alpha=0.5, label='Score Difference per Game', s=15)
+            ax.plot(df['Date'], rolling_avg_diff, color='orange', linestyle='--', label='10-Game Rolling Avg Difference')
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m')); ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=12)); fig.autofmt_xdate()
+            ax.set_xlabel("Game Date"); ax.set_ylabel("Absolute Score Difference"); ax.set_title("Game Competitiveness Trend Over Time"); ax.legend(); ax.grid(True); plt.tight_layout(); plt.show()
+            self.status_label.config(text="Competitiveness trend graph generated.", foreground="blue"); print("Competitiveness trend graph displayed.")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating competitiveness trend: {e}"); self.status_label.config(text=f"Comp. Trend Error: {e}", foreground="red"); print(f"Competitiveness trend error: {e}")
+
+# --- Main Execution ---
+if __name__ == "__main__":
+    setup_database()
+
+    # --- Generate Test Data (Run Once If Needed) ---
+    # Make sure 7-letter-list.txt and 8-letter-list.txt exist in the same directory
+    # Uncomment the line below, run the script once, then comment it out again.
+    generate_test_data(5000)
+    # ---------------------------------------------
+
+    root = tk.Tk()
+    app = GameRecorderApp(root)
+
+    # Display initial warning if graphing deps are missing
+    if not ALL_GRAPH_DEPS_AVAILABLE:
+         app.status_label.config(text="Warning: Graphing disabled (missing pandas/matplotlib).", foreground="orange")
+    elif not HEATMAP_DEPS_AVAILABLE:
+         app.status_label.config(text="Warning: Heatmap disabled (missing seaborn).", foreground="orange")
+
+    root.mainloop()
