@@ -1,3 +1,5 @@
+# Club 01MAY25
+
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
@@ -59,11 +61,14 @@ def load_word_list(filename):
     """Loads words from a file, strips whitespace, converts to uppercase."""
     words = []
     try:
-        with open(filename, 'r', encoding='utf-8') as f:
+        # Ensure the file path is relative to the script's directory
+        script_dir = os.path.dirname(__file__)
+        filepath = os.path.join(script_dir, filename)
+        with open(filepath, 'r', encoding='utf-8') as f:
             words = [line.strip().upper() for line in f if line.strip()]
-        print(f"Successfully loaded {len(words)} words from {filename}.")
+        print(f"Successfully loaded {len(words)} words from {filepath}.")
     except FileNotFoundError:
-        print(f"Error: Word list file not found: {filename}")
+        print(f"Error: Word list file not found: {filename} (expected in script directory)")
     except Exception as e:
         print(f"Error reading {filename}: {e}")
     return words
@@ -74,6 +79,20 @@ COMBINED_WORD_LIST = WORD_LIST_7 + WORD_LIST_8
 
 if not COMBINED_WORD_LIST:
     print("Warning: No words loaded from files. Test data bingos will be empty.")
+
+
+
+WORD_7_INDEX_MAP = {word: i + 1 for i, word in enumerate(WORD_LIST_7)}
+WORD_8_INDEX_MAP = {word: i + 1 for i, word in enumerate(WORD_LIST_8)}
+
+print(f"Created index map for {len(WORD_7_INDEX_MAP)} 7-letter words.")
+print(f"Created index map for {len(WORD_8_INDEX_MAP)} 8-letter words.")
+
+
+
+
+
+
 
 # --- Database Setup ---
 def setup_database():
@@ -96,6 +115,7 @@ def setup_database():
             )
         ''')
         conn.commit()
+        print(f"Database '{DB_NAME}' setup complete.")
     except sqlite3.Error as e:
         print(f"Database error during setup: {e}")
         messagebox.showerror("Database Error", f"Could not set up database: {e}")
@@ -181,12 +201,12 @@ class GameRecorderApp:
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=2)
+        main_frame.columnconfigure(1, weight=2) # Allow input fields to expand more
 
         # --- Input Fields Frame ---
-        input_frame = ttk.Frame(main_frame)
+        input_frame = ttk.LabelFrame(main_frame, text="Record New Game", padding="10")
         input_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        input_frame.columnconfigure(1, weight=1)
+        input_frame.columnconfigure(1, weight=1) # Make entry/combobox column expand
 
         current_row = 0
         # Date
@@ -254,12 +274,17 @@ class GameRecorderApp:
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=2, column=0, columnspan=2, pady=(5, 5), sticky=tk.EW)
         button_frame.columnconfigure(0, weight=1)
-        button_frame.columnconfigure(1, weight=1)
+        button_frame.columnconfigure(1, weight=2)
+        button_frame.columnconfigure(2, weight=1)
 
         self.add_record_button = ttk.Button(button_frame, text="Add Record", command=self.save_record)
         self.add_record_button.grid(row=0, column=0, sticky=tk.E, padx=5)
+
         self.print_button = ttk.Button(button_frame, text="Save Report to File", command=self.print_records_to_file)
-        self.print_button.grid(row=0, column=1, sticky=tk.W, padx=5)
+        self.print_button.grid(row=0, column=1, sticky=tk.EW, padx=5)
+
+        self.bingo_stats_button = ttk.Button(button_frame, text="Bingo Stats", command=self.show_bingo_stats_report) # Calls the correct method below
+        self.bingo_stats_button.grid(row=0, column=2, sticky=tk.W, padx=5)
 
         # --- Status Label ---
         self.status_label = ttk.Label(main_frame, text="")
@@ -276,12 +301,25 @@ class GameRecorderApp:
             if columns != "*":
                  validated_cols = [col.strip() for col in columns.split(',') if col.strip().replace('_','').isalnum()]
                  if validated_cols: safe_columns = ", ".join(validated_cols)
+                 else:
+                     print(f"Warning: Invalid columns requested: {columns}. Fetching all columns.")
+                     safe_columns = "*"
+
             query = f"SELECT {safe_columns} FROM games"
+
             if order_by:
-                safe_order_by = "".join(c for c in order_by if c.isalnum() or c in ['_', ',', ' ']).strip()
-                if safe_order_by and not any(kw in safe_order_by.upper() for kw in ['--', ';', 'DROP', 'INSERT', 'UPDATE', 'DELETE']):
-                     query += f" ORDER BY {safe_order_by}"
-                else: print(f"Warning: Invalid characters detected in ORDER BY clause: {order_by}")
+                safe_order_by_parts = []
+                for part in order_by.split(','):
+                    part = part.strip()
+                    col_name = part.split()[0]
+                    direction = part.split()[1].upper() if len(part.split()) > 1 else 'ASC'
+                    if col_name.replace('_','').isalnum() and direction in ['ASC', 'DESC']:
+                        safe_order_by_parts.append(f"{col_name} {direction}")
+                if safe_order_by_parts:
+                    query += f" ORDER BY {', '.join(safe_order_by_parts)}"
+                else:
+                    print(f"Warning: Invalid characters or structure detected in ORDER BY clause: {order_by}. Ignoring order.")
+
             cursor.execute(query)
             return cursor.fetchall()
         except sqlite3.Error as e:
@@ -303,7 +341,12 @@ class GameRecorderApp:
         p2_score_str = self.p2_score_entry.get().strip()
         p2_bingos_raw = self.p2_bingos_entry.get().strip()
 
-        if not game_date: messagebox.showerror("Input Error", "Date cannot be empty."); self.status_label.config(text="Error: Date missing.", foreground="red"); return
+        try:
+            datetime.datetime.strptime(game_date, '%Y-%m-%d')
+        except ValueError:
+            messagebox.showerror("Input Error", "Invalid date format. Please use YYYY-MM-DD.");
+            self.status_label.config(text="Error: Invalid date format.", foreground="red"); return
+
         if not p1_name: messagebox.showerror("Input Error", "Player 1 Name cannot be empty."); self.status_label.config(text="Error: Player 1 Name missing.", foreground="red"); return
         if not p2_name: messagebox.showerror("Input Error", "Player 2 Name cannot be empty."); self.status_label.config(text="Error: Player 2 Name missing.", foreground="red"); return
         if p1_name == p2_name: messagebox.showwarning("Input Warning", "Player 1 and Player 2 cannot be the same."); self.status_label.config(text="Warning: Players are the same.", foreground="orange"); return
@@ -311,13 +354,16 @@ class GameRecorderApp:
         try:
             p1_score = int(p1_score_str) if p1_score_str else 0
             p2_score = int(p2_score_str) if p2_score_str else 0
-        except ValueError: messagebox.showerror("Input Error", "Scores must be valid numbers."); self.status_label.config(text="Error: Invalid score.", foreground="red"); return
+            if p1_score < 0 or p2_score < 0:
+                 raise ValueError("Scores cannot be negative.")
+        except ValueError as e:
+            messagebox.showerror("Input Error", f"Scores must be valid non-negative numbers. {e}");
+            self.status_label.config(text="Error: Invalid score.", foreground="red"); return
 
-        # Process manually entered bingos
         p1_bingos_list = [word.strip().upper() for word in p1_bingos_raw.split(',') if word.strip()]
-        p1_bingos_str = ", ".join(p1_bingos_list)
+        p1_bingos_str = ", ".join(sorted(p1_bingos_list))
         p2_bingos_list = [word.strip().upper() for word in p2_bingos_raw.split(',') if word.strip()]
-        p2_bingos_str = ", ".join(p2_bingos_list)
+        p2_bingos_str = ", ".join(sorted(p2_bingos_list))
 
         conn = None
         try:
@@ -333,7 +379,10 @@ class GameRecorderApp:
             self.status_label.config(text="Record added successfully!", foreground="green")
             print(f"Record Added: {game_date}, P1: {p1_name}({p1_score}), P2: {p2_name}({p2_score})")
             self.clear_fields()
-        except sqlite3.Error as e: messagebox.showerror("Database Error", f"Could not save record: {e}"); print(f"DB insert error: {e}"); self.status_label.config(text=f"Error saving: {e}", foreground="red")
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Could not save record: {e}");
+            print(f"DB insert error: {e}");
+            self.status_label.config(text=f"Error saving: {e}", foreground="red")
         finally:
             if conn: conn.close()
 
@@ -347,7 +396,9 @@ class GameRecorderApp:
         self.p2_name_combo.current(0)
         self.p2_score_entry.delete(0, tk.END)
         self.p2_bingos_entry.delete(0, tk.END)
+        self.date_entry.focus()
         self.status_label.config(text="")
+
 
     def print_records_to_file(self):
         """Fetches records, calculates stats (incl. H2H), prompts for filename, and saves report."""
@@ -356,7 +407,10 @@ class GameRecorderApp:
             defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
             initialfile=default_filename, title="Save Game Report As"
         )
-        if not filepath: self.status_label.config(text="Save cancelled.", foreground="orange"); return
+        if not filepath:
+            self.status_label.config(text="Save cancelled.", foreground="orange")
+            print("Report save cancelled.")
+            return
 
         print(f"Attempting to save report to: {filepath}")
         records = self._fetch_game_data(
@@ -364,75 +418,123 @@ class GameRecorderApp:
             order_by="game_date DESC, id DESC"
         )
         if records is None: return
-        if not records: messagebox.showinfo("No Records", "No records to save."); self.status_label.config(text="No records found.", foreground="blue"); return
+        if not records:
+            messagebox.showinfo("No Records", "No records to save.")
+            self.status_label.config(text="No records found.", foreground="blue")
+            return
 
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(f"Game Records Report - Generated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write("=" * 100 + "\n")
-                f.write("\n--- All Game Records ---\n\n")
-                header = f"{'ID':<4} {'Date':<12} {'Player 1':<18} {'Score':<6} {'P1 Bingos':<25} {'Player 2':<18} {'Score':<6} {'P2 Bingos':<25}\n"
-                f.write(header); f.write("-" * len(header.strip()) + "\n")
+
+                # --- Section 1: All Game Records ---
+                f.write("\n--- All Game Records (Most Recent First) ---\n\n")
+                id_w, date_w, p_w, s_w, b_w = 4, 12, 18, 6, 25
+                header = f"{'ID':<{id_w}} {'Date':<{date_w}} {'Player 1':<{p_w}} {'Score':<{s_w}} {'P1 Bingos':<{b_w}} {'Player 2':<{p_w}} {'Score':<{s_w}} {'P2 Bingos':<{b_w}}\n"
+                f.write(header)
+                f.write("-" * (id_w + date_w + p_w*2 + s_w*2 + b_w*2 + 7) + "\n")
                 for row in records:
-                    p1b_str = (row[4][:23] + '..') if row[4] and len(row[4]) > 25 else row[4]
-                    p2b_str = (row[7][:23] + '..') if row[7] and len(row[7]) > 25 else row[7]
-                    f.write(f"{row[0]:<4} {row[1]:<12} {row[2]:<18} {row[3]:<6} {p1b_str if p1b_str else '':<25} {row[5]:<18} {row[6]:<6} {p2b_str if p2b_str else '':<25}\n")
-                f.write("-" * len(header.strip()) + "\n"); f.write(f"Total game records listed: {len(records)}\n\n")
+                    p1b_str = (row[4][:b_w-2] + '..') if row[4] and len(row[4]) > b_w else (row[4] if row[4] else '')
+                    p2b_str = (row[7][:b_w-2] + '..') if row[7] and len(row[7]) > b_w else (row[7] if row[7] else '')
+                    f.write(f"{row[0]:<{id_w}} {row[1]:<{date_w}} {row[2]:<{p_w}} {row[3]:<{s_w}} {p1b_str:<{b_w}} {row[5]:<{p_w}} {row[6]:<{s_w}} {p2b_str:<{b_w}}\n")
+                f.write("-" * (id_w + date_w + p_w*2 + s_w*2 + b_w*2 + 7) + "\n")
+                f.write(f"Total game records listed: {len(records)}\n\n")
 
-                player_stats = defaultdict(lambda: [0, 0, 0]); h2h_stats = defaultdict(lambda: [0, 0])
+                # --- Section 2: Player Statistics ---
+                player_stats = defaultdict(lambda: {'wins': 0, 'losses': 0, 'ties': 0, 'games': 0})
+                h2h_stats = defaultdict(lambda: defaultdict(lambda: {'wins': 0, 'losses': 0}))
                 for row in records:
-                    p1_name, p1_score, p2_name, p2_score = row[2], row[3], row[5], row[6]
-                    if not p1_name or not p2_name: continue
-                    p1_wins_h2h = None
-                    if p1_score > p2_score: player_stats[p1_name][0] += 1; player_stats[p2_name][1] += 1; p1_wins_h2h = True
-                    elif p2_score > p1_score: player_stats[p2_name][0] += 1; player_stats[p1_name][1] += 1; p1_wins_h2h = False
-                    else: player_stats[p1_name][2] += 1; player_stats[p2_name][2] += 1
-                    if p1_wins_h2h is not None:
-                        player_a, player_b = sorted((p1_name, p2_name)); matchup_key = (player_a, player_b)
-                        if p1_wins_h2h: h2h_stats[matchup_key][0 if p1_name == player_a else 1] += 1
-                        else: h2h_stats[matchup_key][0 if p2_name == player_a else 1] += 1
+                    _, _, p1_name, p1_score, _, p2_name, p2_score, _ = row
+                    if not p1_name or not p2_name or p1_score is None or p2_score is None: continue
+                    player_stats[p1_name]['games'] += 1
+                    player_stats[p2_name]['games'] += 1
+                    if p1_score > p2_score:
+                        player_stats[p1_name]['wins'] += 1; player_stats[p2_name]['losses'] += 1
+                        h2h_stats[p1_name][p2_name]['wins'] += 1; h2h_stats[p2_name][p1_name]['losses'] += 1
+                    elif p2_score > p1_score:
+                        player_stats[p2_name]['wins'] += 1; player_stats[p1_name]['losses'] += 1
+                        h2h_stats[p2_name][p1_name]['wins'] += 1; h2h_stats[p1_name][p2_name]['losses'] += 1
+                    else:
+                        player_stats[p1_name]['ties'] += 1; player_stats[p2_name]['ties'] += 1
+                stats_list = []
+                for name, data in player_stats.items():
+                    wins, losses = data['wins'], data['losses']; total_decided = wins + losses
+                    win_pct = wins / total_decided if total_decided > 0 else 0.0
+                    stats_list.append({'name': name, **data, 'win_pct': win_pct})
+                stats_list.sort(key=lambda item: item['name'])
+                stats_list.sort(key=lambda item: item['wins'], reverse=True)
+                stats_list.sort(key=lambda item: item['win_pct'], reverse=True)
+                f.write("\n--- Player Win/Loss Records (Sorted by Win %) ---\n\n")
+                p_w_stat, w_w, l_w, t_w, g_w, pct_w = 20, 6, 7, 6, 7, 7
+                stats_header = f"{'Player':<{p_w_stat}} {'Wins':<{w_w}} {'Losses':<{l_w}} {'Ties':<{t_w}} {'Games':<{g_w}} {'Win %':<{pct_w}}\n"
+                f.write(stats_header); f.write("-" * (p_w_stat + w_w + l_w + t_w + g_w + pct_w + 5) + "\n")
+                for item in stats_list:
+                    f.write(f"{item['name']:<{p_w_stat}} {item['wins']:<{w_w}} {item['losses']:<{l_w}} {item['ties']:<{t_w}} {item['games']:<{g_w}} {item['win_pct']:<{pct_w}.1%}\n")
+                f.write("-" * (p_w_stat + w_w + l_w + t_w + g_w + pct_w + 5) + "\n")
 
-                stats_list = list(player_stats.items())
-                def get_win_percentage(stats): wins, losses = stats[0], stats[1]; total = wins + losses; return wins / total if total > 0 else 0.0
-                stats_list.sort(key=lambda item: item[0]); stats_list.sort(key=lambda item: item[1][0], reverse=True); stats_list.sort(key=lambda item: get_win_percentage(item[1]), reverse=True)
-                f.write("\n--- Player Win/Loss Records (Sorted) ---\n\n")
-                stats_header = f"{'Player':<20} {'Wins':<6} {'Losses':<7} {'Ties':<6} {'Win %':<7}\n"
-                f.write(stats_header); f.write("-" * len(stats_header.strip()) + "\n")
-                for name, stats in stats_list: wins, losses, ties = stats; win_pct = get_win_percentage(stats); f.write(f"{name:<20} {wins:<6} {losses:<7} {ties:<6} {win_pct:<7.1%}\n")
-                f.write("-" * len(stats_header.strip()) + "\n")
-
+                # --- Section 3: Head-to-Head Records ---
                 f.write("\n--- Head-to-Head Records ---\n\n")
-                sorted_h2h = sorted(h2h_stats.items())
-                if not sorted_h2h: f.write("No head-to-head matchups found.\n")
+                h2h_players = sorted(list(h2h_stats.keys()))
+                if not h2h_players or len(h2h_players) < 2:
+                    f.write("No head-to-head matchups with wins/losses found.\n")
                 else:
-                    max_name_len = max(len(p) for p_tuple in h2h_stats.keys() for p in p_tuple) if h2h_stats else 20
-                    max_name_len = max(20, max_name_len)
+                    max_name_len = max(len(p) for p in h2h_players) if h2h_players else p_w_stat
+                    max_name_len = max(p_w_stat, max_name_len)
                     h2h_header = f"{'Player A':<{max_name_len}} vs {'Player B':<{max_name_len}} : {'Score (A-B)'}\n"
-                    f.write(h2h_header); f.write("-" * len(h2h_header.strip()) + "\n")
-                    for (player_a, player_b), (wins_a, wins_b) in sorted_h2h: f.write(f"{player_a:<{max_name_len}} vs {player_b:<{max_name_len}} : {wins_a:>4} - {wins_b:<4}\n")
-                    f.write("-" * len(h2h_header.strip()) + "\n")
+                    f.write(h2h_header); f.write("-" * (max_name_len * 2 + 16) + "\n")
+                    displayed_pairs = set()
+                    for p1 in h2h_players:
+                        for p2 in h2h_players:
+                            if p1 == p2: continue
+                            pair = tuple(sorted((p1, p2)))
+                            if pair in displayed_pairs: continue
+                            displayed_pairs.add(pair)
+                            player_a, player_b = pair
+                            wins_a = h2h_stats[player_a].get(player_b, {}).get('wins', 0)
+                            wins_b = h2h_stats[player_b].get(player_a, {}).get('wins', 0)
+                            if wins_a > 0 or wins_b > 0:
+                                f.write(f"{player_a:<{max_name_len}} vs {player_b:<{max_name_len}} : {wins_a:>4} - {wins_b:<4}\n")
+                    f.write("-" * (max_name_len * 2 + 16) + "\n")
 
             self.status_label.config(text=f"Report saved successfully.", foreground="green")
             print(f"Successfully saved report to {filepath}")
             messagebox.showinfo("Save Successful", f"Report saved to:\n{filepath}")
-        except IOError as e: messagebox.showerror("File Error", f"Could not write file: {e}"); print(f"File error: {e}"); self.status_label.config(text=f"File Error: {e}", foreground="red")
-        except Exception as e: messagebox.showerror("Error", f"An unexpected error during report generation: {e}"); print(f"Report generation error: {e}"); self.status_label.config(text=f"Report Error: {e}", foreground="red")
+        except IOError as e:
+            messagebox.showerror("File Error", f"Could not write file: {e}")
+            print(f"File error: {e}")
+            self.status_label.config(text=f"File Error: {e}", foreground="red")
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error during report generation: {e}")
+            print(f"Report generation error: {e}")
+            self.status_label.config(text=f"Report Error: {e}", foreground="red")
 
     # --- Graphing Methods ---
     def _check_graph_deps(self, require_seaborn=False):
         """Checks if necessary graphing libraries are available."""
-        if not MATPLOTLIB_AVAILABLE: messagebox.showerror("Graphing Error", "Matplotlib library is not installed."); return False
-        if not PANDAS_AVAILABLE: messagebox.showerror("Graphing Error", "Pandas library is not installed."); return False
-        if require_seaborn and not SEABORN_AVAILABLE: messagebox.showerror("Graphing Error", "Seaborn library is not installed."); return False
+        global np # Make numpy global if needed by multiple graph funcs
+        try:
+            import numpy as np
+        except ImportError:
+             print("Warning: Numpy not found. Some graph features might be limited.")
+             # Let specific functions handle numpy absence if possible
+
+        if not MATPLOTLIB_AVAILABLE: messagebox.showerror("Graphing Error", "Matplotlib library is not installed.\nPlease install using: pip install matplotlib"); return False
+        if not PANDAS_AVAILABLE: messagebox.showerror("Graphing Error", "Pandas library is not installed.\nPlease install using: pip install pandas"); return False
+        if require_seaborn and not SEABORN_AVAILABLE: messagebox.showerror("Graphing Error", "Seaborn library is not installed.\nPlease install using: pip install seaborn"); return False
         return True
 
     def show_score_distribution_boxplot(self):
         """Graph 1: Player Score Distribution (Box Plot)"""
         if not self._check_graph_deps(): return
+        try: import numpy as np
+        except ImportError: messagebox.showerror("Graphing Error", "Numpy is required for boxplot coloring.\nPlease install using: pip install numpy"); return
+
         print("Generating score distribution box plot...")
         self.status_label.config(text="Generating box plot...", foreground="blue")
         records = self._fetch_game_data("player1_name, player1_score, player2_name, player2_score")
         if records is None or not records: messagebox.showinfo("No Data", "No game records found."); self.status_label.config(text="No records for graph.", foreground="blue"); return
+
         try:
             scores_by_player = defaultdict(list)
             for p1n, p1s, p2n, p2s in records:
@@ -443,10 +545,15 @@ class GameRecorderApp:
             sorted_player_names = sorted(filtered_scores.keys())
             data_to_plot = [filtered_scores[name] for name in sorted_player_names]
             plt.style.use('seaborn-v0_8-darkgrid')
-            fig, ax = plt.subplots(figsize=(12, 7))
-            ax.boxplot(data_to_plot, tick_labels=sorted_player_names, showmeans=True) # Use tick_labels
+            fig, ax = plt.subplots(figsize=(max(8, len(sorted_player_names)*0.6), 7))
+            bp = ax.boxplot(data_to_plot, patch_artist=True, showmeans=True,
+                       meanprops={"marker":"o", "markerfacecolor":"white", "markeredgecolor":"black", "markersize":"6"},
+                       medianprops={"color":"orange", "linewidth":1.5})
+            colors = plt.cm.viridis(np.linspace(0, 1, len(data_to_plot)))
+            for patch, color in zip(bp['boxes'], colors): patch.set_facecolor(color); patch.set_alpha(0.7)
+            ax.set_xticklabels(sorted_player_names)
             ax.set_xlabel("Player"); ax.set_ylabel("Score"); ax.set_title(f"Player Score Distribution (Min. {MIN_GAMES_FOR_BOXPLOT} Games)")
-            plt.xticks(rotation=45, ha='right'); plt.tight_layout(); plt.show()
+            plt.xticks(rotation=45, ha='right'); plt.grid(axis='y', linestyle='--', alpha=0.7); plt.tight_layout(); plt.show()
             self.status_label.config(text="Box plot generated.", foreground="blue"); print("Box plot displayed.")
         except Exception as e: messagebox.showerror("Graphing Error", f"Error generating box plot: {e}"); self.status_label.config(text=f"Box Plot Error: {e}", foreground="red"); print(f"Box plot error: {e}")
 
@@ -454,30 +561,32 @@ class GameRecorderApp:
         """Graph 2: Player Score Trend Over Time (Line Chart) - Prompts for player"""
         if not self._check_graph_deps(): return
         print("Prompting for player score trend..."); self.status_label.config(text="Select player for trend...", foreground="blue")
-        records = self._fetch_game_data("player1_name, player2_name")
-        if records is None or not records: messagebox.showinfo("No Data", "No game records found."); self.status_label.config(text="No records found.", foreground="blue"); return
-        players = set(p for p1n, p2n in records for p in (p1n, p2n) if p)
+        records_names = self._fetch_game_data("player1_name, player2_name")
+        if records_names is None or not records_names: messagebox.showinfo("No Data", "No game records found."); self.status_label.config(text="No records found.", foreground="blue"); return
+        players = set(p for p1n, p2n in records_names for p in (p1n, p2n) if p)
         if not players: messagebox.showinfo("No Data", "No valid player names found."); self.status_label.config(text="No players found.", foreground="blue"); return
         sorted_players = sorted(list(players))
         player_to_plot = simpledialog.askstring("Select Player", "Enter player name for score trend:\n(Case Sensitive)\n\nAvailable:\n" + "\n".join(sorted_players), parent=self.root)
-        if not player_to_plot: self.status_label.config(text="Trend graph cancelled.", foreground="orange"); return
-        if player_to_plot not in players: messagebox.showerror("Invalid Player", f"Player '{player_to_plot}' not found."); self.status_label.config(text="Invalid player selected.", foreground="red"); return
+        if not player_to_plot: self.status_label.config(text="Trend graph cancelled.", foreground="orange"); print("Trend graph cancelled."); return
+        if player_to_plot not in players: messagebox.showerror("Invalid Player", f"Player '{player_to_plot}' not found in records."); self.status_label.config(text="Invalid player selected.", foreground="red"); return
         print(f"Generating score trend for {player_to_plot}..."); self.status_label.config(text=f"Generating trend for {player_to_plot}...", foreground="blue")
         conn = None
         try:
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
-            cursor.execute("SELECT game_date, player1_score FROM games WHERE player1_name = ? UNION ALL SELECT game_date, player2_score FROM games WHERE player2_name = ? ORDER BY game_date ASC", (player_to_plot, player_to_plot))
+            cursor.execute("SELECT game_date, player1_score AS score FROM games WHERE player1_name = ? UNION ALL SELECT game_date, player2_score AS score FROM games WHERE player2_name = ? ORDER BY game_date ASC", (player_to_plot, player_to_plot))
             player_data = cursor.fetchall()
             if not player_data: messagebox.showinfo("No Data", f"No scores found for player '{player_to_plot}'."); self.status_label.config(text=f"No data for {player_to_plot}.", foreground="blue"); return
             df = pd.DataFrame(player_data, columns=['Date', 'Score'])
-            df['Score'] = pd.to_numeric(df['Score'], errors='coerce'); df['Date'] = pd.to_datetime(df['Date']); df = df.sort_values(by='Date')
+            df['Score'] = pd.to_numeric(df['Score'], errors='coerce'); df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df = df.dropna(subset=['Date', 'Score']).sort_values(by='Date')
+            if df.empty: messagebox.showinfo("No Data", f"No valid date/score entries found for '{player_to_plot}'."); self.status_label.config(text=f"No valid data for {player_to_plot}.", foreground="blue"); return
             rolling_avg = df['Score'].rolling(window=5, min_periods=1).mean()
             plt.style.use('seaborn-v0_8-darkgrid'); fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(df['Date'], df['Score'], marker='o', linestyle='-', label='Actual Score', alpha=0.7)
-            ax.plot(df['Date'], rolling_avg, marker='', linestyle='--', color='red', label='5-Game Rolling Avg')
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d')); ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=10)); fig.autofmt_xdate()
-            ax.set_xlabel("Game Date"); ax.set_ylabel("Score"); ax.set_title(f"Score Trend for {player_to_plot}"); ax.legend(); ax.grid(True); plt.tight_layout(); plt.show()
+            ax.plot(df['Date'], df['Score'], marker='o', linestyle='-', markersize=4, label='Actual Score', alpha=0.6, zorder=2)
+            ax.plot(df['Date'], rolling_avg, marker='', linestyle='--', color='red', linewidth=1.5, label='5-Game Rolling Avg', zorder=3)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d')); ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=12)); fig.autofmt_xdate()
+            ax.set_xlabel("Game Date"); ax.set_ylabel("Score"); ax.set_title(f"Score Trend for {player_to_plot}"); ax.legend(); ax.grid(True, linestyle='--', alpha=0.6); plt.tight_layout(); plt.show()
             self.status_label.config(text=f"Trend graph for {player_to_plot} generated.", foreground="blue"); print(f"Trend graph for {player_to_plot} displayed.")
         except sqlite3.Error as e: messagebox.showerror("Database Error", f"Could not fetch trend data: {e}"); self.status_label.config(text=f"DB Error (Trend): {e}", foreground="red"); print(f"DB error fetching trend data: {e}")
         except Exception as e: messagebox.showerror("Graphing Error", f"Error generating trend graph: {e}"); self.status_label.config(text=f"Trend Graph Error: {e}", foreground="red"); print(f"Trend graph error: {e}")
@@ -485,31 +594,87 @@ class GameRecorderApp:
             if conn: conn.close()
 
     def show_h2h_heatmap(self):
-        """Graph 3: Head-to-Head Win Matrix (Heatmap)"""
+        """Graph 3: Head-to-Head Win Matrix (Heatmap) - Uses mask for NaN values."""
         if not self._check_graph_deps(require_seaborn=True): return
-        print("Generating H2H heatmap..."); self.status_label.config(text="Generating H2H heatmap...", foreground="blue")
+        print("Generating H2H heatmap...")
+        self.status_label.config(text="Generating H2H heatmap...", foreground="blue")
         records = self._fetch_game_data("player1_name, player1_score, player2_name, player2_score")
-        if records is None or not records: messagebox.showinfo("No Data", "No game records found."); self.status_label.config(text="No records for heatmap.", foreground="blue"); return
+        if records is None or not records:
+            messagebox.showinfo("No Data", "No game records found.")
+            self.status_label.config(text="No records for heatmap.", foreground="blue")
+            return
+
         try:
-            h2h_wins = defaultdict(lambda: defaultdict(int)); games_played = defaultdict(lambda: defaultdict(int)); players = set()
+            h2h_wins = defaultdict(lambda: defaultdict(int))
+            games_played = defaultdict(lambda: defaultdict(int))
+            players = set()
+
             for p1n, p1s, p2n, p2s in records:
-                if not p1n or not p2n or p1s is None or p2s is None: continue
-                players.add(p1n); players.add(p2n); games_played[p1n][p2n] += 1; games_played[p2n][p1n] += 1
+                if not p1n or not p2n or p1s is None or p2s is None or p1n == p2n: continue
+                players.add(p1n); players.add(p2n)
+                games_played[p1n][p2n] += 1; games_played[p2n][p1n] += 1
                 if p1s > p2s: h2h_wins[p1n][p2n] += 1
                 elif p2s > p1s: h2h_wins[p2n][p1n] += 1
-            if len(players) < 2: messagebox.showinfo("Insufficient Data", "Need >= 2 players with games between them."); self.status_label.config(text="Insufficient data.", foreground="blue"); return
-            sorted_players = sorted(list(players)); win_pct_matrix = pd.DataFrame(index=sorted_players, columns=sorted_players, dtype=float)
+
+            if len(players) < 2:
+                messagebox.showinfo("Insufficient Data", "Need at least 2 players with games played against each other.")
+                self.status_label.config(text="Insufficient data for heatmap.", foreground="blue")
+                return
+
+            sorted_players = sorted(list(players))
+            win_pct_matrix = pd.DataFrame(index=sorted_players, columns=sorted_players, dtype=float)
+
             for p1 in sorted_players:
                 for p2 in sorted_players:
                     if p1 == p2: win_pct_matrix.loc[p1, p2] = pd.NA; continue
-                    p1_vs_p2_wins = h2h_wins[p1][p2]; p2_vs_p1_wins = h2h_wins[p2][p1]; total_non_tie_games = p1_vs_p2_wins + p2_vs_p1_wins
-                    win_pct_matrix.loc[p1, p2] = p1_vs_p2_wins / total_non_tie_games if total_non_tie_games > 0 else pd.NA
-            plt.style.use('seaborn-v0_8-darkgrid') # Corrected style name
+                    p1_vs_p2_wins = h2h_wins[p1].get(p2, 0)
+                    p2_vs_p1_wins = h2h_wins[p2].get(p1, 0)
+                    total_non_tie_games = p1_vs_p2_wins + p2_vs_p1_wins
+                    if total_non_tie_games > 0:
+                        win_pct_matrix.loc[p1, p2] = p1_vs_p2_wins / total_non_tie_games
+                    else:
+                        win_pct_matrix.loc[p1, p2] = pd.NA
+
+            # --- Create the mask for NaN values ---
+            mask = win_pct_matrix.isnull()
+            # --------------------------------------
+
+            plt.style.use('seaborn-v0_8-whitegrid') # Style with white background
             plt.figure(figsize=(max(8, len(sorted_players)*0.8), max(6, len(sorted_players)*0.6)))
-            sns.heatmap(win_pct_matrix, annot=True, fmt=".1%", cmap="coolwarm_r", linewidths=.5, linecolor='lightgray', cbar_kws={'label': 'Win % (Row vs Col)'}, annot_kws={"size": 8})
-            plt.title("Head-to-Head Win Percentage Matrix"); plt.xlabel("Opponent"); plt.ylabel("Player"); plt.xticks(rotation=45, ha='right'); plt.yticks(rotation=0); plt.tight_layout(); plt.show()
-            self.status_label.config(text="H2H heatmap generated.", foreground="blue"); print("H2H heatmap displayed.")
-        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating heatmap: {e}"); self.status_label.config(text=f"Heatmap Error: {e}", foreground="red"); print(f"Heatmap error: {e}")
+
+            sns.heatmap(
+                win_pct_matrix,
+                mask=mask,            # <--- ADDED MASK ARGUMENT
+                annot=True,
+                fmt=".1%",
+                cmap="coolwarm_r",
+                linewidths=.5,
+                linecolor='lightgray',
+                cbar=True,
+                cbar_kws={'label': 'Win % (Row Player vs Column Player)'},
+                annot_kws={"size": 8}
+                # Ensure na_color is NOT present
+            )
+
+            plt.title("Head-to-Head Win Percentage Matrix")
+            plt.xlabel("Opponent")
+            plt.ylabel("Player")
+            plt.xticks(rotation=45, ha='right')
+            plt.yticks(rotation=0)
+            plt.tight_layout()
+            plt.show()
+
+            self.status_label.config(text="H2H heatmap generated.", foreground="blue")
+            print("H2H heatmap displayed.")
+        except Exception as e:
+            messagebox.showerror("Graphing Error", f"Error generating heatmap: {e}")
+            self.status_label.config(text=f"Heatmap Error: {e}", foreground="red")
+            print(f"Heatmap error: {e}")
+
+
+
+
+
 
     def show_competitiveness_trend(self):
         """Graph 4: Game Competitiveness Over Time (Scatter/Line)"""
@@ -523,25 +688,536 @@ class GameRecorderApp:
                 if p1s is not None and p2s is not None:
                     try: date_obj = datetime.datetime.strptime(date_str, '%Y-%m-%d').date(); score_diff = abs(p1s - p2s); competitiveness_data.append({'Date': date_obj, 'Score Difference': score_diff})
                     except ValueError: print(f"Skipping record with invalid date format: {date_str}"); continue
-            if not competitiveness_data: messagebox.showinfo("No Data", "No valid game data found."); self.status_label.config(text="No valid data.", foreground="blue"); return
-            df = pd.DataFrame(competitiveness_data); df = df.sort_values(by='Date')
+            if not competitiveness_data: messagebox.showinfo("No Data", "No valid game data with scores found."); self.status_label.config(text="No valid data for comp. trend.", foreground="blue"); return
+            df = pd.DataFrame(competitiveness_data); df['Date'] = pd.to_datetime(df['Date']); df = df.sort_values(by='Date')
             rolling_avg_diff = df['Score Difference'].rolling(window=10, min_periods=1).mean()
             plt.style.use('seaborn-v0_8-darkgrid'); fig, ax = plt.subplots(figsize=(12, 6))
-            ax.scatter(df['Date'], df['Score Difference'], alpha=0.5, label='Score Difference per Game', s=15)
-            ax.plot(df['Date'], rolling_avg_diff, color='orange', linestyle='--', label='10-Game Rolling Avg Difference')
+            ax.scatter(df['Date'], df['Score Difference'], alpha=0.4, label='Score Difference per Game', s=15, zorder=2)
+            ax.plot(df['Date'], rolling_avg_diff, color='orange', linestyle='--', linewidth=1.5, label='10-Game Rolling Avg Difference', zorder=3)
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m')); ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=12)); fig.autofmt_xdate()
-            ax.set_xlabel("Game Date"); ax.set_ylabel("Absolute Score Difference"); ax.set_title("Game Competitiveness Trend Over Time"); ax.legend(); ax.grid(True); plt.tight_layout(); plt.show()
+            ax.set_xlabel("Game Date"); ax.set_ylabel("Absolute Score Difference"); ax.set_title("Game Competitiveness Trend Over Time"); ax.legend(); ax.grid(True, linestyle='--', alpha=0.6); plt.tight_layout(); plt.show()
             self.status_label.config(text="Competitiveness trend graph generated.", foreground="blue"); print("Competitiveness trend graph displayed.")
         except Exception as e: messagebox.showerror("Graphing Error", f"Error generating competitiveness trend: {e}"); self.status_label.config(text=f"Comp. Trend Error: {e}", foreground="red"); print(f"Competitiveness trend error: {e}")
 
+    # --- Bingo Stats Method (Rank-Based, File Output, Split Stat 4/5) --- # <<< THIS IS THE LATEST VERSION
+    def show_bingo_stats_report(self):
+        """
+        Calculates bingo statistics based on word list rank (1-based index).
+        Stats 4 & 5 show HIGHEST rank achieved (least probable) for 7 & 8 letters separately.
+        Saves the report to a text file.
+        Uses "Rank" terminology.
+        """
+        # Add a print statement to confirm this version is running
+        print("--- Running show_bingo_stats_report (File Output Version, Split Stats 4/5) ---")
+        self.status_label.config(text="Calculating bingo stats (rank-based)...", foreground="blue")
+        print("Calculating bingo stats (rank-based)...")
+
+        # Fetch necessary data
+        records = self._fetch_game_data("player1_name, player1_bingos, player2_name, player2_bingos")
+        if records is None:
+            self.status_label.config(text="Error fetching data for stats.", foreground="red")
+            return
+        if not records:
+            messagebox.showinfo("No Data", "No game records found to calculate bingo stats.")
+            self.status_label.config(text="No records for bingo stats.", foreground="blue")
+            return
+
+        # Check map availability
+        has_7_map = bool(WORD_7_INDEX_MAP)
+        has_8_map = bool(WORD_8_INDEX_MAP)
+        if not has_7_map and not has_8_map:
+            print("Warning: Word list rank maps not available. Rank stats cannot be calculated.")
+
+        # --- Data Processing ---
+        player_games = defaultdict(int)
+        player_total_bingos = defaultdict(int)
+        player_sum_7_ranks = defaultdict(int)
+        player_count_7_bingos = defaultdict(int)
+        player_max_7_rank = defaultdict(int) # Track MAX rank for 7-letters
+        player_sum_8_ranks = defaultdict(int)
+        player_count_8_bingos = defaultdict(int)
+        player_max_8_rank = defaultdict(int) # Track MAX rank for 8-letters
+
+        for p1_name, p1_bingos_str, p2_name, p2_bingos_str in records:
+            # Process Player 1
+            if p1_name:
+                player_games[p1_name] += 1
+                if p1_bingos_str:
+                    bingos = [b.strip().upper() for b in p1_bingos_str.split(',') if b.strip()]
+                    for bingo in bingos:
+                        player_total_bingos[p1_name] += 1
+                        rank_7, rank_8 = None, None
+                        if has_7_map and bingo in WORD_7_INDEX_MAP: rank_7 = WORD_7_INDEX_MAP[bingo]
+                        if has_8_map and bingo in WORD_8_INDEX_MAP: rank_8 = WORD_8_INDEX_MAP[bingo]
+
+                        if rank_7 is not None:
+                            player_sum_7_ranks[p1_name] += rank_7
+                            player_count_7_bingos[p1_name] += 1
+                            player_max_7_rank[p1_name] = max(player_max_7_rank[p1_name], rank_7)
+                        if rank_8 is not None:
+                            player_sum_8_ranks[p1_name] += rank_8
+                            player_count_8_bingos[p1_name] += 1
+                            player_max_8_rank[p1_name] = max(player_max_8_rank[p1_name], rank_8)
+
+            # Process Player 2
+            if p2_name:
+                if p1_name != p2_name: player_games[p2_name] += 1
+                if p2_bingos_str:
+                    bingos = [b.strip().upper() for b in p2_bingos_str.split(',') if b.strip()]
+                    for bingo in bingos:
+                        player_total_bingos[p2_name] += 1
+                        rank_7, rank_8 = None, None
+                        if has_7_map and bingo in WORD_7_INDEX_MAP: rank_7 = WORD_7_INDEX_MAP[bingo]
+                        if has_8_map and bingo in WORD_8_INDEX_MAP: rank_8 = WORD_8_INDEX_MAP[bingo]
+
+                        if rank_7 is not None:
+                            player_sum_7_ranks[p2_name] += rank_7
+                            player_count_7_bingos[p2_name] += 1
+                            player_max_7_rank[p2_name] = max(player_max_7_rank[p2_name], rank_7)
+                        if rank_8 is not None:
+                            player_sum_8_ranks[p2_name] += rank_8
+                            player_count_8_bingos[p2_name] += 1
+                            player_max_8_rank[p2_name] = max(player_max_8_rank[p2_name], rank_8)
+
+        # --- Calculate Final Stats ---
+        active_players = list(player_games.keys())
+        if not active_players:
+            messagebox.showinfo("No Data", "No players with recorded games found.")
+            self.status_label.config(text="No player data for stats.", foreground="blue")
+            return
+
+        # 1) Average Bingos Per Game
+        avg_bingos_per_game = []
+        for player in active_players:
+            games = player_games[player]
+            avg = player_total_bingos[player] / games if games > 0 else 0.0
+            avg_bingos_per_game.append((player, avg))
+        avg_bingos_per_game.sort(key=lambda item: item[1], reverse=True)
+
+        # 2) Average 7-Letter Bingo Rank (Lower is better)
+        avg_rank_7 = []
+        if has_7_map:
+            for player in active_players:
+                count = player_count_7_bingos.get(player, 0)
+                avg_r = player_sum_7_ranks[player] / count if count > 0 else None
+                avg_rank_7.append((player, avg_r))
+            avg_rank_7.sort(key=lambda item: item[1] if item[1] is not None else float('inf'))
+        else:
+            print("Skipping 7-letter average rank calculation (map unavailable).")
+
+        # 3) Average 8-Letter Bingo Rank (Lower is better)
+        avg_rank_8 = []
+        if has_8_map:
+            for player in active_players:
+                count = player_count_8_bingos.get(player, 0)
+                avg_r = player_sum_8_ranks[player] / count if count > 0 else None
+                avg_rank_8.append((player, avg_r))
+            avg_rank_8.sort(key=lambda item: item[1] if item[1] is not None else float('inf'))
+        else:
+            print("Skipping 8-letter average rank calculation (map unavailable).")
+
+        # 4) Highest 7-Letter Rank Achieved (Least Probable 7) (Sorted Ascending by this rank)
+        highest_rank_7 = []
+        if has_7_map:
+            for player in active_players:
+                 max_7 = player_max_7_rank.get(player, 0)
+                 highest_rank_7.append((player, max_7 if max_7 > 0 else None))
+            highest_rank_7.sort(key=lambda item: item[1] if item[1] is not None else float('inf'))
+        else:
+            print("Skipping 7-letter highest rank calculation (map unavailable).")
+
+        # 5) Highest 8-Letter Rank Achieved (Least Probable 8) (Sorted Ascending by this rank)
+        highest_rank_8 = []
+        if has_8_map:
+            for player in active_players:
+                 max_8 = player_max_8_rank.get(player, 0)
+                 highest_rank_8.append((player, max_8 if max_8 > 0 else None))
+            highest_rank_8.sort(key=lambda item: item[1] if item[1] is not None else float('inf'))
+        else:
+            print("Skipping 8-letter highest rank calculation (map unavailable).")
+
+
+        # --- Format Report String ---
+        report_lines = []
+        report_lines.append("--- Bingo Statistics Report (Rank-Based) ---")
+        report_lines.append(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        report_lines.append("Note: Lower rank means higher probability based on word list position.\n")
+
+        # Stat 1
+        report_lines.append("1. Average Bingos Per Game (Most to Least)")
+        report_lines.append("-" * 45)
+        if avg_bingos_per_game:
+            for player, avg in avg_bingos_per_game: report_lines.append(f"{player:<25}   {avg:.2f}")
+        else: report_lines.append("No data.")
+        report_lines.append("\n")
+
+        # Stat 2
+        report_lines.append("2. Average 7-Letter Bingo Rank* (Lowest to Highest)")
+        report_lines.append("-" * 55)
+        if avg_rank_7:
+            for player, avg_r in avg_rank_7: report_lines.append(f"{player:<25}   {avg_r:.2f}" if avg_r is not None else f"{player:<25}   N/A (No 7-letter bingos)")
+        elif not has_7_map: report_lines.append("Data unavailable (requires 7-letter word list).")
+        else: report_lines.append("No players with 7-letter bingos found.")
+        report_lines.append("\n")
+
+        # Stat 3
+        report_lines.append("3. Average 8-Letter Bingo Rank* (Lowest to Highest)")
+        report_lines.append("-" * 55)
+        if avg_rank_8:
+            for player, avg_r in avg_rank_8: report_lines.append(f"{player:<25}   {avg_r:.2f}" if avg_r is not None else f"{player:<25}   N/A (No 8-letter bingos)")
+        elif not has_8_map: report_lines.append("Data unavailable (requires 8-letter word list).")
+        else: report_lines.append("No players with 8-letter bingos found.")
+        report_lines.append("\n")
+
+        # Stat 4
+        report_lines.append("4. Highest 7-Letter Rank Achieved (Least Probable 7)* (Lowest to Highest)")
+        report_lines.append("-" * 75)
+        if highest_rank_7:
+            for player, highest_r7 in highest_rank_7: report_lines.append(f"{player:<25}   {highest_r7:.2f}" if highest_r7 is not None else f"{player:<25}   N/A (No 7-letter bingos)")
+        elif not has_7_map: report_lines.append("Data unavailable (requires 7-letter word list).")
+        else: report_lines.append("No players with 7-letter bingos found.")
+        report_lines.append("\n")
+
+        # Stat 5
+        report_lines.append("5. Highest 8-Letter Rank Achieved (Least Probable 8)* (Lowest to Highest)")
+        report_lines.append("-" * 75)
+        if highest_rank_8:
+            for player, highest_r8 in highest_rank_8: report_lines.append(f"{player:<25}   {highest_r8:.2f}" if highest_r8 is not None else f"{player:<25}   N/A (No 8-letter bingos)")
+        elif not has_8_map: report_lines.append("Data unavailable (requires 8-letter word list).")
+        else: report_lines.append("No players with 8-letter bingos found.")
+        report_lines.append("\n")
+
+        # Notes
+        report_lines.append("*" * 80)
+        report_lines.append("*Note on Rank:")
+        report_lines.append(" - Rank is the 1-based position of the bingo word in the loaded word list.")
+        report_lines.append(f" - Word lists loaded: {len(WORD_LIST_7)} (7-letter), {len(WORD_LIST_8)} (8-letter) words.")
+        report_lines.append(" - 'Average Rank' is the average rank of all recognized 7 or 8-letter bingos played by that player.")
+        report_lines.append(" - 'Highest Rank Achieved' (Stats 4 & 5) is the maximum rank (least probable based on list position)")
+        report_lines.append("   among all recognized 7 or 8-letter bingos played by that player for that length.")
+        report_lines.append(" - Requires the corresponding 7/8 letter word lists to be loaded correctly.")
+        report_lines.append("*" * 80)
+
+        report_text = "\n".join(report_lines)
+
+        # --- Save Report to File ---
+        # Add print statement before file dialog
+        print("--- Preparing to save bingo stats to file ---")
+        default_filename = f"bingo_stats_{datetime.date.today().strftime('%Y-%m-%d')}.txt"
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+            initialfile=default_filename,
+            title="Save Bingo Stats Report As"
+        )
+
+        if not filepath:
+            self.status_label.config(text="Bingo stats save cancelled.", foreground="orange")
+            print("Bingo stats save cancelled.")
+            return
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(report_text)
+            self.status_label.config(text="Bingo stats report saved successfully.", foreground="green")
+            print(f"Bingo stats report saved to {filepath}")
+            messagebox.showinfo("Save Successful", f"Bingo Stats Report saved to:\n{filepath}")
+        except IOError as e:
+            messagebox.showerror("File Error", f"Could not write bingo stats file: {e}")
+            print(f"File error saving bingo stats: {e}")
+            self.status_label.config(text=f"File Error: {e}", foreground="red")
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred during bingo report saving: {e}")
+            print(f"Bingo report saving error: {e}")
+            self.status_label.config(text=f"Report Save Error: {e}", foreground="red")
+
+
+
+
+
+
+
+'''
+def show_bingo_stats_report(self):
+        """
+        Calculates bingo statistics based on word list rank (1-based index).
+        Stats 4 & 5 show HIGHEST rank achieved (least probable) for 7 & 8 letters separately.
+        Saves the report to a text file.
+        Uses "Rank" terminology.
+        """
+        self.status_label.config(text="Calculating bingo stats (rank-based)...", foreground="blue")
+        print("Calculating bingo stats (rank-based)...")
+
+        # Fetch necessary data
+        records = self._fetch_game_data("player1_name, player1_bingos, player2_name, player2_bingos")
+        if records is None:
+            self.status_label.config(text="Error fetching data for stats.", foreground="red")
+            return
+        if not records:
+            messagebox.showinfo("No Data", "No game records found to calculate bingo stats.")
+            self.status_label.config(text="No records for bingo stats.", foreground="blue")
+            return
+
+        # Check map availability
+        has_7_map = bool(WORD_7_INDEX_MAP)
+        has_8_map = bool(WORD_8_INDEX_MAP)
+        if not has_7_map and not has_8_map:
+            print("Warning: Word list rank maps not available. Rank stats cannot be calculated.")
+
+        # --- Data Processing ---
+        player_games = defaultdict(int)
+        player_total_bingos = defaultdict(int)
+        player_sum_7_ranks = defaultdict(int)
+        player_count_7_bingos = defaultdict(int)
+        player_max_7_rank = defaultdict(int) # Track MAX rank for 7-letters
+        player_sum_8_ranks = defaultdict(int)
+        player_count_8_bingos = defaultdict(int)
+        player_max_8_rank = defaultdict(int) # Track MAX rank for 8-letters
+
+        for p1_name, p1_bingos_str, p2_name, p2_bingos_str in records:
+            # Process Player 1
+            if p1_name:
+                player_games[p1_name] += 1
+                if p1_bingos_str:
+                    bingos = [b.strip().upper() for b in p1_bingos_str.split(',') if b.strip()]
+                    for bingo in bingos:
+                        player_total_bingos[p1_name] += 1
+                        rank_7, rank_8 = None, None
+                        # Check 7-letter list first
+                        if has_7_map and bingo in WORD_7_INDEX_MAP: rank_7 = WORD_7_INDEX_MAP[bingo]
+                        # Check 8-letter list (even if found in 7, for max rank tracking)
+                        if has_8_map and bingo in WORD_8_INDEX_MAP: rank_8 = WORD_8_INDEX_MAP[bingo]
+
+                        if rank_7 is not None:
+                            player_sum_7_ranks[p1_name] += rank_7
+                            player_count_7_bingos[p1_name] += 1
+                            player_max_7_rank[p1_name] = max(player_max_7_rank[p1_name], rank_7)
+                        if rank_8 is not None:
+                            player_sum_8_ranks[p1_name] += rank_8
+                            player_count_8_bingos[p1_name] += 1
+                            player_max_8_rank[p1_name] = max(player_max_8_rank[p1_name], rank_8)
+
+            # Process Player 2
+            if p2_name:
+                if p1_name != p2_name: player_games[p2_name] += 1
+                if p2_bingos_str:
+                    bingos = [b.strip().upper() for b in p2_bingos_str.split(',') if b.strip()]
+                    for bingo in bingos:
+                        player_total_bingos[p2_name] += 1
+                        rank_7, rank_8 = None, None
+                        if has_7_map and bingo in WORD_7_INDEX_MAP: rank_7 = WORD_7_INDEX_MAP[bingo]
+                        if has_8_map and bingo in WORD_8_INDEX_MAP: rank_8 = WORD_8_INDEX_MAP[bingo]
+
+                        if rank_7 is not None:
+                            player_sum_7_ranks[p2_name] += rank_7
+                            player_count_7_bingos[p2_name] += 1
+                            player_max_7_rank[p2_name] = max(player_max_7_rank[p2_name], rank_7)
+                        if rank_8 is not None:
+                            player_sum_8_ranks[p2_name] += rank_8
+                            player_count_8_bingos[p2_name] += 1
+                            player_max_8_rank[p2_name] = max(player_max_8_rank[p2_name], rank_8)
+
+        # --- Calculate Final Stats ---
+        active_players = list(player_games.keys())
+        if not active_players:
+            messagebox.showinfo("No Data", "No players with recorded games found.")
+            self.status_label.config(text="No player data for stats.", foreground="blue")
+            return
+
+        # 1) Average Bingos Per Game
+        avg_bingos_per_game = []
+        for player in active_players:
+            games = player_games[player]
+            avg = player_total_bingos[player] / games if games > 0 else 0.0
+            avg_bingos_per_game.append((player, avg))
+        avg_bingos_per_game.sort(key=lambda item: item[1], reverse=True)
+
+        # 2) Average 7-Letter Bingo Rank (Lower is better)
+        avg_rank_7 = []
+        if has_7_map:
+            for player in active_players:
+                count = player_count_7_bingos.get(player, 0)
+                avg_r = player_sum_7_ranks[player] / count if count > 0 else None
+                avg_rank_7.append((player, avg_r))
+            avg_rank_7.sort(key=lambda item: item[1] if item[1] is not None else float('inf'))
+        else:
+            print("Skipping 7-letter average rank calculation (map unavailable).")
+
+        # 3) Average 8-Letter Bingo Rank (Lower is better)
+        avg_rank_8 = []
+        if has_8_map:
+            for player in active_players:
+                count = player_count_8_bingos.get(player, 0)
+                avg_r = player_sum_8_ranks[player] / count if count > 0 else None
+                avg_rank_8.append((player, avg_r))
+            avg_rank_8.sort(key=lambda item: item[1] if item[1] is not None else float('inf'))
+        else:
+            print("Skipping 8-letter average rank calculation (map unavailable).")
+
+        # 4) Highest 7-Letter Rank Achieved (Least Probable 7) (Sorted Ascending by this rank)
+        highest_rank_7 = []
+        if has_7_map:
+            for player in active_players:
+                 max_7 = player_max_7_rank.get(player, 0)
+                 highest_rank_7.append((player, max_7 if max_7 > 0 else None))
+            # Sort: Ascending by the highest rank achieved
+            highest_rank_7.sort(key=lambda item: item[1] if item[1] is not None else float('inf'))
+        else:
+            print("Skipping 7-letter highest rank calculation (map unavailable).")
+
+        # 5) Highest 8-Letter Rank Achieved (Least Probable 8) (Sorted Ascending by this rank)
+        highest_rank_8 = []
+        if has_8_map:
+            for player in active_players:
+                 max_8 = player_max_8_rank.get(player, 0)
+                 highest_rank_8.append((player, max_8 if max_8 > 0 else None))
+            # Sort: Ascending by the highest rank achieved
+            highest_rank_8.sort(key=lambda item: item[1] if item[1] is not None else float('inf'))
+        else:
+            print("Skipping 8-letter highest rank calculation (map unavailable).")
+
+
+        # --- Format Report String ---
+        report_lines = []
+        report_lines.append("--- Bingo Statistics Report (Rank-Based) ---")
+        report_lines.append(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        report_lines.append("Note: Lower rank means higher probability based on word list position.\n")
+
+        # Stat 1
+        report_lines.append("1. Average Bingos Per Game (Most to Least)")
+        report_lines.append("-" * 45)
+        if avg_bingos_per_game:
+            for player, avg in avg_bingos_per_game:
+                report_lines.append(f"{player:<25}   {avg:.2f}")
+        else: report_lines.append("No data.")
+        report_lines.append("\n")
+
+        # Stat 2
+        report_lines.append("2. Average 7-Letter Bingo Rank* (Lowest to Highest)")
+        report_lines.append("-" * 55)
+        if avg_rank_7:
+            for player, avg_r in avg_rank_7:
+                report_lines.append(f"{player:<25}   {avg_r:.2f}" if avg_r is not None else f"{player:<25}   N/A (No 7-letter bingos)")
+        elif not has_7_map: report_lines.append("Data unavailable (requires 7-letter word list).")
+        else: report_lines.append("No players with 7-letter bingos found.")
+        report_lines.append("\n")
+
+        # Stat 3
+        report_lines.append("3. Average 8-Letter Bingo Rank* (Lowest to Highest)")
+        report_lines.append("-" * 55)
+        if avg_rank_8:
+            for player, avg_r in avg_rank_8:
+                 report_lines.append(f"{player:<25}   {avg_r:.2f}" if avg_r is not None else f"{player:<25}   N/A (No 8-letter bingos)")
+        elif not has_8_map: report_lines.append("Data unavailable (requires 8-letter word list).")
+        else: report_lines.append("No players with 8-letter bingos found.")
+        report_lines.append("\n")
+
+        # Stat 4 - NEW: Highest 7-Letter Rank
+        report_lines.append("4. Highest 7-Letter Rank Achieved (Least Probable 7)* (Lowest to Highest)")
+        report_lines.append("-" * 75)
+        if highest_rank_7:
+            for player, highest_r7 in highest_rank_7:
+                 report_lines.append(f"{player:<25}   {highest_r7:.2f}" if highest_r7 is not None else f"{player:<25}   N/A (No 7-letter bingos)")
+        elif not has_7_map: report_lines.append("Data unavailable (requires 7-letter word list).")
+        else: report_lines.append("No players with 7-letter bingos found.")
+        report_lines.append("\n")
+
+        # Stat 5 - NEW: Highest 8-Letter Rank
+        report_lines.append("5. Highest 8-Letter Rank Achieved (Least Probable 8)* (Lowest to Highest)")
+        report_lines.append("-" * 75)
+        if highest_rank_8:
+            for player, highest_r8 in highest_rank_8:
+                 report_lines.append(f"{player:<25}   {highest_r8:.2f}" if highest_r8 is not None else f"{player:<25}   N/A (No 8-letter bingos)")
+        elif not has_8_map: report_lines.append("Data unavailable (requires 8-letter word list).")
+        else: report_lines.append("No players with 8-letter bingos found.")
+        report_lines.append("\n")
+
+
+        # Notes - Updated for new stats 4/5
+        report_lines.append("*" * 80)
+        report_lines.append("*Note on Rank:")
+        report_lines.append(" - Rank is the 1-based position of the bingo word in the loaded word list.")
+        report_lines.append(f" - Word lists loaded: {len(WORD_LIST_7)} (7-letter), {len(WORD_LIST_8)} (8-letter) words.")
+        report_lines.append(" - 'Average Rank' is the average rank of all recognized 7 or 8-letter bingos")
+        report_lines.append("   played by that player.")
+        report_lines.append(" - 'Highest Rank Achieved' (Stats 4 & 5) is the maximum rank (least probable based")
+        report_lines.append("   on list position) among all recognized 7 or 8-letter bingos played by that player.")
+        report_lines.append(" - Requires the corresponding 7/8 letter word lists to be loaded correctly.")
+        report_lines.append("*" * 80)
+
+        report_text = "\n".join(report_lines)
+
+        # --- Save Report to File ---
+        default_filename = f"bingo_stats_{datetime.date.today().strftime('%Y-%m-%d')}.txt"
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+            initialfile=default_filename,
+            title="Save Bingo Stats Report As"
+        )
+
+        if not filepath:
+            self.status_label.config(text="Bingo stats save cancelled.", foreground="orange")
+            print("Bingo stats save cancelled.")
+            return
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(report_text)
+            self.status_label.config(text="Bingo stats report saved successfully.", foreground="green")
+            print(f"Bingo stats report saved to {filepath}")
+            messagebox.showinfo("Save Successful", f"Bingo Stats Report saved to:\n{filepath}")
+        except IOError as e:
+            messagebox.showerror("File Error", f"Could not write bingo stats file: {e}")
+            print(f"File error saving bingo stats: {e}")
+            self.status_label.config(text=f"File Error: {e}", foreground="red")
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred during bingo report saving: {e}")
+            print(f"Bingo report saving error: {e}")
+            self.status_label.config(text=f"Report Save Error: {e}", foreground="red")
+'''
+
+
+
+
+
+
+
+
+
+
 # --- Main Execution ---
 if __name__ == "__main__":
+    print("Starting Scrabble Club Database Application...")
     setup_database()
 
-    # --- Generate Test Data (Run Once If Needed) ---
-    # Make sure 7-letter-list.txt and 8-letter-list.txt exist in the same directory
-    # Uncomment the line below, run the script once, then comment it out again.
-    generate_test_data(5000)
+    # --- Generate Test Data (Optional - Run Once If Needed) ---
+    # Check if DB is empty before generating data
+    conn_check = None
+    generate_data = False
+    try:
+        conn_check = sqlite3.connect(DB_NAME)
+        cursor_check = conn_check.cursor()
+        cursor_check.execute("SELECT COUNT(*) FROM games")
+        count = cursor_check.fetchone()[0]
+        if count == 0:
+            print("Database is empty.")
+            # Set a flag or directly call generate_test_data here if desired on first run
+            # generate_data = True # Example flag
+            # Or uncomment the line below to generate data ONLY if the DB is empty
+            # generate_test_data(500) # Generate 500 records if DB is empty
+        else:
+            print(f"Database contains {count} records.")
+    except sqlite3.Error as e:
+        print(f"Error checking database size: {e}")
+    finally:
+        if conn_check:
+            conn_check.close()
+
+    # Uncomment the line below to FORCE generation of test data every time (useful for testing)
+    # Be careful, this will add duplicates if run multiple times without clearing the DB.
+    generate_test_data(500) # Generate 500 records on this run
+
     # ---------------------------------------------
 
     root = tk.Tk()
@@ -552,5 +1228,8 @@ if __name__ == "__main__":
          app.status_label.config(text="Warning: Graphing disabled (missing pandas/matplotlib).", foreground="orange")
     elif not HEATMAP_DEPS_AVAILABLE:
          app.status_label.config(text="Warning: Heatmap disabled (missing seaborn).", foreground="orange")
+    else:
+         app.status_label.config(text="Ready.", foreground="blue") # Initial ready state
 
     root.mainloop()
+    print("Application closed.")
