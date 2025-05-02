@@ -1,6 +1,4 @@
--- Add delete and search for record
 
--- Add date range picker for reports
 
 
 Admin Tools
@@ -24,6 +22,8 @@ _________
 
 -- Highest number of games
 
+-- List all bingos by a player along with their probability
+
 
 
 
@@ -36,4 +36,13 @@ _________
 -- Running average of bingo prob by player?
 
 -- 
+
+
+Done
+_________
+
+
+-- Add delete and search for record
+
+-- Add date range picker for reports
 
