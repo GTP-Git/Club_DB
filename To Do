@@ -2,3 +2,38 @@
 
 -- Add date range picker for reports
 
+
+Admin Tools
+_________
+
+-- Need a way to upload new words lists, such as when NASPA updates the dictionary
+
+Data Entry
+_________
+
+-- When entering bingos, should we add a word validation warning. Caution: ANEROOD is not a valid word. Enter anyway? This will allow the entry of phonies or catch errors.
+
+Reports
+_________
+
+-- Need support for 9+-letter bingos
+
+-- Make reports dynamically sized
+
+-- Highest game score
+
+-- Highest number of games
+
+
+
+
+
+Charts
+_________
+
+-- Histogram of bingos by quartile
+
+-- Running average of bingo prob by player?
+
+-- 
+
