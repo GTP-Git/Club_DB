@@ -6,6 +6,8 @@ _________
 
 -- Need a way to upload new words lists, such as when NASPA updates the dictionary
 
+-- When the program is deploayed, I will update it. The update MUST maintain the current db. How to?
+
 Data Entry
 _________
 
@@ -16,13 +18,23 @@ _________
 
 -- Need support for 9+-letter bingos
 
--- Make reports dynamically sized
-
 -- Highest game score
 
--- Highest number of games
+-- Total number of games
 
 -- List all bingos by a player along with their probability
+
+-- Head-to-head comparison of two players??
+
+-- Need option to either save to text file or open in window.
+
+-- Create a "Full Player Report" which has basically everything possible about that one player
+
+-- If blanks are recorded, all sorts of data. Average score with 0,1,2, W/L record with 0,1,2, etc. How much does score increase per blank?
+
+-- Avg spread
+
+
 
 
 
@@ -33,9 +45,26 @@ _________
 
 -- Histogram of bingos by quartile
 
+-- Histogram of scores
+
 -- Running average of bingo prob by player?
 
--- 
+-- Show heatmap by W/L record, as well as by win%
+
+-- Scatterplot of bingos by prob by player(s)
+
+-- -- Need option to either save to text file or open in window.
+
+
+
+Cool Ideas
+_________
+
+-- Allow for searching by bingo letter string, so that, for instance, you can run a promo for Most Bingos Starting With 'ANTI'
+
+-- Figure out a cool icon for the program. Maybe something combining Scrabble with databases?
+
+
 
 
 Done
@@ -45,4 +74,7 @@ _________
 -- Add delete and search for record
 
 -- Add date range picker for reports
+
+-- Make reports dynamically sized
+
 
