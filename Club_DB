@@ -6,11 +6,12 @@ from tkinter import messagebox
 from tkinter import filedialog
 from tkinter import simpledialog
 import sqlite3
-import datetime
+import time
 import os
 from collections import defaultdict
 import random
-from datetime import timedelta
+import shutil
+from datetime import date, datetime, timedelta
 
 
 
@@ -93,7 +94,7 @@ def load_player_names():
 
         if not os.path.exists(filepath):
             print(f"'{PLAYER_CONFIG_FILE}' not found. Creating with default players.")
-            players = sorted([p.strip().title() for p in default_players if p.strip()], key=str.lower)
+            players = sorted([p.strip() for p in default_players if p.strip()], key=str.lower)
             # Save the default list immediately
             try:
                 with open(filepath, 'w', encoding='utf-8') as f:
@@ -104,17 +105,17 @@ def load_player_names():
                 # Continue with default list in memory anyway
         else:
             with open(filepath, 'r', encoding='utf-8') as f:
-                players = sorted([line.strip().title() for line in f if line.strip()], key=str.lower)
+                players = sorted([line.strip() for line in f if line.strip()], key=str.lower)
             print(f"Loaded {len(players)} players from '{PLAYER_CONFIG_FILE}'.")
 
     except IOError as e:
         print(f"Error reading player list file '{PLAYER_CONFIG_FILE}': {e}")
         print("Using default player list as fallback.")
-        players = sorted([p.strip().title() for p in default_players if p.strip()], key=str.lower)
+        players = sorted([p.strip() for p in default_players if p.strip()], key=str.lower)
     except Exception as e:
         print(f"An unexpected error occurred loading player list: {e}")
         print("Using default player list as fallback.")
-        players = sorted([p.strip().title() for p in default_players if p.strip()], key=str.lower)
+        players = sorted([p.strip() for p in default_players if p.strip()], key=str.lower)
 
     APP_PLAYER_LIST = players # Assign to the global variable
 
@@ -295,7 +296,17 @@ class GameRecorderApp:
         ttk.Label(input_frame, text="Date:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
         self.date_entry = ttk.Entry(input_frame, width=40)
         self.date_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
-        self.date_entry.insert(0, datetime.date.today().strftime('%Y-%m-%d'))
+        try:
+            today_date = date.today() # Use the directly imported 'date'
+            print(f"DEBUG: date.today() worked: {today_date}")
+            date_string = today_date.strftime('%Y-%m-%d')
+            print(f"DEBUG: strftime worked: {date_string}")
+            self.date_entry.insert(0, date_string)
+            print(f"DEBUG: Inserted date string successfully.")
+        except Exception as e:
+            print(f"ERROR during date insertion: {e}")
+            # Insert a fallback date if it fails
+            self.date_entry.insert(0, "YYYY-MM-DD")
         current_row += 1
 
         ttk.Label(input_frame, text="Player 1 Name:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
@@ -337,7 +348,7 @@ class GameRecorderApp:
         action_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=10)
         action_frame.columnconfigure(0, weight=1)
         action_frame.columnconfigure(1, weight=1)
-        action_frame.columnconfigure(2, weight=1)
+        #action_frame.columnconfigure(2, weight=1)
 
         self.reports_button = ttk.Button(action_frame, text="Reports", command=self.open_report_picker_dialog)
         self.reports_button.grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
@@ -396,7 +407,7 @@ class GameRecorderApp:
 
         ttk.Label(date_frame, text="End Date:").grid(row=0, column=3, sticky=tk.W, padx=(10, 5), pady=3)
         end_date_entry = ttk.Entry(date_frame, width=12)
-        end_date_entry.insert(0, datetime.date.today().strftime('%Y-%m-%d'))
+        end_date_entry.insert(0, date.today().strftime('%Y-%m-%d'))
         end_date_entry.grid(row=0, column=4, sticky=(tk.W, tk.E), padx=5, pady=3)
 
         if TKCALENDAR_AVAILABLE:
@@ -503,13 +514,13 @@ class GameRecorderApp:
         start_date_str = start_date_str.strip()
         if start_date_str:
             try:
-                datetime.datetime.strptime(start_date_str, '%Y-%m-%d')
+                datetime.strptime(start_date_str, '%Y-%m-%d')
                 start_date_validated = start_date_str
             except ValueError: error_messages.append(f"Invalid Start Date format: '{start_date_str}'. Use YYYY-MM-DD or leave blank.")
         end_date_str = end_date_str.strip()
         if end_date_str:
             try:
-                datetime.datetime.strptime(end_date_str, '%Y-%m-%d')
+                datetime.strptime(end_date_str, '%Y-%m-%d')
                 end_date_validated = end_date_str
             except ValueError: error_messages.append(f"Invalid End Date format: '{end_date_str}'. Use YYYY-MM-DD or leave blank.")
         if start_date_validated and end_date_validated and start_date_validated > end_date_validated:
@@ -560,7 +571,7 @@ class GameRecorderApp:
 
         
 
-    def _fetch_game_data(self, columns="*", order_by=None, start_date=None, end_date=None, player_name=None): # Added player_name
+    def _fetch_game_data(self, columns="*", order_by=None, start_date=None, end_date=None, player_name=None):
         """
         Helper to fetch specified columns from the games table, optionally ordered
         and filtered by date range (inclusive) and/or player name.
@@ -580,14 +591,14 @@ class GameRecorderApp:
 
             # Build the WHERE clause dynamically
             where_clauses = []
-            params = []
+            params = [] # Parameters for the SQL query
 
-            # Player filter
-            if player_name:
-                where_clauses.append("(player1_name = ? OR player2_name = ?)") # Check both columns
-                params.extend([player_name, player_name]) # Add player name twice for the OR
+            # --- Player filter ---
+            if player_name: # Only add clause if a specific player is provided
+                where_clauses.append("(player1_name = ? OR player2_name = ?)")
+                params.extend([player_name, player_name]) # Add player name twice
 
-            # Date filter
+            # --- Date filter ---
             if start_date:
                 where_clauses.append("game_date >= ?")
                 params.append(start_date)
@@ -595,12 +606,13 @@ class GameRecorderApp:
                 where_clauses.append("game_date <= ?")
                 params.append(end_date)
 
+            # --- Construct final query ---
             query = f"SELECT {safe_columns} FROM games"
             if where_clauses:
-                # Join clauses with AND
+                # Join multiple clauses with AND
                 query += " WHERE " + " AND ".join(where_clauses)
 
-            # ORDER BY clause (remains the same)
+            # --- ORDER BY clause ---
             if order_by:
                 safe_order_by_parts = []
                 for part in order_by.split(','):
@@ -614,8 +626,9 @@ class GameRecorderApp:
                 if safe_order_by_parts: query += f" ORDER BY {', '.join(safe_order_by_parts)}"
                 else: print(f"Warning: Invalid or empty ORDER BY clause: {order_by}. Ignoring order.")
 
-            # print(f"Executing query: {query} with params: {params}") # Debugging
-            cursor.execute(query, params)
+            # --- Execute Query ---
+            print(f"DEBUG: Executing query: {query} with params: {params}") # Add debug print for query/params
+            cursor.execute(query, params) # Use parameterized query
             return cursor.fetchall()
         except sqlite3.Error as e:
             messagebox.showerror("Database Error", f"Could not fetch game data: {e}")
@@ -912,7 +925,7 @@ class GameRecorderApp:
     def _generate_report_header_text(self):
         """Generates the main report header string."""
         lines = []
-        lines.append(f"Game Records Report - Generated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Game Records Report - Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append("=" * 100)
         return "\n".join(lines)
 
@@ -1170,30 +1183,30 @@ class GameRecorderApp:
         return "\n".join(lines)
 
 
-    def _open_calendar_for_entry(self, target_entry, parent_window): # Added parent_window parameter
+    def _open_calendar_for_entry(self, target_entry, parent_window):
         """
         Opens a separate Toplevel window with a Calendar widget.
         Temporarily releases the grab on the parent_window.
+        Attempts to style selection background via ttk.Style.
         """
         if not TKCALENDAR_AVAILABLE:
-            messagebox.showerror("Error", "tkcalendar library is not available.", parent=parent_window) # Use parent
+            messagebox.showerror("Error", "tkcalendar library is not available.", parent=parent_window)
             return
 
-        # --- Release parent's grab ---
         parent_window.grab_release()
 
-        cal_dialog = tk.Toplevel(parent_window) # Make parent explicit
+        cal_dialog = tk.Toplevel(parent_window)
         cal_dialog.title("Select Date")
-        cal_dialog.transient(parent_window) # Transient to the correct parent
-        # cal_dialog.grab_set() # This dialog doesn't need its own grab
+        cal_dialog.transient(parent_window)
 
         try:
             current_date_str = target_entry.get()
             try:
-                current_date = datetime.datetime.strptime(current_date_str, '%Y-%m-%d').date()
+                current_date = datetime.strptime(current_date_str, '%Y-%m-%d').date()
             except ValueError:
-                current_date = datetime.date.today()
+                current_date = date.today()
 
+            # Keep previous color settings that worked for header/text
             cal = tkcalendar.Calendar(
                 cal_dialog,
                 selectmode='day',
@@ -1201,43 +1214,52 @@ class GameRecorderApp:
                 month=current_date.month,
                 day=current_date.day,
                 date_pattern='y-mm-dd',
-                background='lightgrey',    # Background for the whole calendar
-                foreground='black',        # Default text for the widget
-                selectforeground='black',  # Text color for selected date
-                normalforeground='black',  # Ensure normal dates are black
-                weekendforeground='black', # Ensure weekend dates are black
-                headerforeground='black',  # Text color for Month/Year header (attempt 1)
-                headersforeground='black' # Text color for day names (Mon, Tue..) / maybe header (attempt 2)
+                background='lightgrey',
+                foreground='black', selectforeground='black',
+                normalforeground='black', weekendforeground='black',
+                headerforeground='black', headersforeground='black'
+                # selectbackground='#a0d0a0' # Keep this or remove, ttk.Style might override
             )
-
             cal.pack(pady=10, padx=10)
+
+            # --- Attempt styling via ttk.Style ---
+            try:
+                style = ttk.Style(cal_dialog)
+                # Note: The internal style name might vary slightly, but 'TCalendar'
+                # or variations like 'Treeview' (if it uses one internally) are common.
+                # We target 'TCalendar' first. We also target the specific state 'selected'.
+                style.map('TCalendar', selectbackground=[('selected', '#a0d0a0')]) # Light green for selected state
+                # You might need to experiment with the style name if 'TCalendar' doesn't work.
+                # Sometimes it might inherit from 'TLabel' or need a more specific path.
+                # Also try configuring the base style:
+                style.configure('TCalendar', selectbackground='#a0d0a0')
+                print("DEBUG: Applied ttk.Style for TCalendar selectbackground.")
+            except tk.TclError as e:
+                print(f"DEBUG: Could not apply ttk.Style for TCalendar (might be normal): {e}")
+            # --- End styling attempt ---
+
 
             def set_date_and_close():
                 selected_date = cal.get_date()
+                print(f"DEBUG: Calendar selected date: {selected_date}")
                 target_entry.delete(0, tk.END)
                 target_entry.insert(0, selected_date)
-                cal_dialog.destroy() # Close calendar dialog
+                cal_dialog.destroy()
 
             select_button = ttk.Button(cal_dialog, text="Select", command=set_date_and_close)
             select_button.pack(pady=(0, 10))
 
-            # Center the calendar dialog relative to the parent window
             cal_dialog.update_idletasks()
-            parent_x = parent_window.winfo_x()
-            parent_y = parent_window.winfo_y()
-            parent_w = parent_window.winfo_width()
-            parent_h = parent_window.winfo_height()
-            cal_w = cal_dialog.winfo_width()
-            cal_h = cal_dialog.winfo_height()
+            parent_x = parent_window.winfo_x(); parent_y = parent_window.winfo_y()
+            parent_w = parent_window.winfo_width(); parent_h = parent_window.winfo_height()
+            cal_w = cal_dialog.winfo_width(); cal_h = cal_dialog.winfo_height()
             x = parent_x + (parent_w // 2) - (cal_w // 2)
             y = parent_y + (parent_h // 2) - (cal_h // 2)
             cal_dialog.geometry(f"+{x}+{y}")
 
-            cal_dialog.wait_window() # Wait for calendar dialog to close
+            cal_dialog.wait_window()
 
         finally:
-            # --- Re-apply parent's grab ---
-            # Check if parent still exists before grabbing
             if parent_window.winfo_exists():
                  parent_window.grab_set()
 
@@ -1254,29 +1276,29 @@ class GameRecorderApp:
 
     def _set_date_range_week(self, start_entry, end_entry):
         """Sets the date entries to the current week (Mon-Sun)."""
-        today = datetime.date.today()
-        start_of_week = today - datetime.timedelta(days=today.weekday()) # Monday is 0
-        end_of_week = start_of_week + datetime.timedelta(days=6)
+        today = date.today()
+        start_of_week = today - timedelta(days=today.weekday()) # Use imported 'timedelta'
+        end_of_week = start_of_week + timedelta(days=6)
         self._update_date_entry(start_entry, start_of_week)
         self._update_date_entry(end_entry, end_of_week)
         print(f"Date range set to current week: {start_of_week} to {end_of_week}")
 
     def _set_date_range_month(self, start_entry, end_entry):
         """Sets the date entries to the current month (1st to last day)."""
-        today = datetime.date.today()
+        today = date.today()
         start_of_month = today.replace(day=1)
         # Find end of month by getting first day of next month and subtracting one day
         next_month_year = start_of_month.year + (start_of_month.month // 12)
         next_month_month = (start_of_month.month % 12) + 1
-        first_day_next_month = datetime.date(next_month_year, next_month_month, 1)
-        end_of_month = first_day_next_month - datetime.timedelta(days=1)
+        first_day_next_month = date(next_month_year, next_month_month, 1)
+        end_of_month = first_day_next_month - timedelta(days=1)
         self._update_date_entry(start_entry, start_of_month)
         self._update_date_entry(end_entry, end_of_month)
         print(f"Date range set to current month: {start_of_month} to {end_of_month}")
 
     def _set_date_range_year(self, start_entry, end_entry):
         """Sets the date entries to the current year (Jan 1 - Dec 31)."""
-        today = datetime.date.today()
+        today = date.today()
         start_of_year = today.replace(month=1, day=1)
         end_of_year = today.replace(month=12, day=31)
         self._update_date_entry(start_entry, start_of_year)
@@ -1288,6 +1310,56 @@ class GameRecorderApp:
         self._update_date_entry(start_entry, None) # Pass None to clear
         self._update_date_entry(end_entry, None)   # Pass None to clear
         print("Date range set to 'All Time' (cleared).")
+
+
+
+    def _backup_database(self):
+        """Creates a timestamped backup copy of the database file."""
+        source_db_path = DB_NAME # Use the constant defined at the top
+
+        if not os.path.exists(source_db_path):
+            messagebox.showerror("Backup Error", f"Source database file not found:\n{source_db_path}", parent=self.admin_main_dialog)
+            print(f"Error: Backup source file '{source_db_path}' does not exist.")
+            return
+
+        # Generate default filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"{os.path.splitext(DB_NAME)[0]}_backup_{timestamp}.db"
+
+        # Ask user for backup location and filename
+        backup_path = filedialog.asksaveasfilename(
+            parent=self.admin_main_dialog, # Ensure dialog is parent
+            title="Save Database Backup As",
+            initialfile=default_filename,
+            defaultextension=".db",
+            filetypes=[("Database files", "*.db"), ("All files", "*.*")]
+        )
+
+        if not backup_path: # User cancelled
+            print("Database backup cancelled by user.")
+            self.status_label.config(text="Backup cancelled.", foreground="orange")
+            return
+
+        # Perform the copy
+        try:
+            self.status_label.config(text="Backing up database...", foreground="blue")
+            print(f"Attempting to backup '{source_db_path}' to '{backup_path}'...")
+            shutil.copy2(source_db_path, backup_path) # copy2 preserves metadata
+            self.status_label.config(text="Database backup successful!", foreground="green")
+            print("Database backup successful.")
+            messagebox.showinfo("Backup Successful", f"Database successfully backed up to:\n{backup_path}", parent=self.admin_main_dialog)
+        except IOError as e:
+            self.status_label.config(text=f"Backup failed: I/O Error {e.errno}", foreground="red")
+            print(f"Error backing up database (IOError): {e}")
+            messagebox.showerror("Backup Failed", f"Could not copy database file:\n{e}", parent=self.admin_main_dialog)
+        except Exception as e:
+            self.status_label.config(text=f"Backup failed: Unexpected error", foreground="red")
+            print(f"Error backing up database (Exception): {e}")
+            messagebox.showerror("Backup Failed", f"An unexpected error occurred during backup:\n{e}", parent=self.admin_main_dialog)
+        finally:
+             # Reset status bar after a short delay (optional)
+             # self.root.after(5000, lambda: self.status_label.config(text="Ready.", foreground="blue"))
+             pass # Or just leave the status message
 
 
         
@@ -1357,49 +1429,56 @@ class GameRecorderApp:
             tree.delete(item)
         print("Search filters cleared.")
 
+
+
     def _execute_search(self, player_combo, start_entry, end_entry, tree):
         """Fetches data based on filters and populates the Treeview."""
-        player_filter = player_combo.get()
+        # --- Get filter values ---
+        player_filter = player_combo.get() # Get selected player name string
         start_date_str = start_entry.get().strip()
         end_date_str = end_entry.get().strip()
 
-
+        # Store last search parameters (including the potentially empty player_filter)
         self.last_search_player = player_filter if player_filter else None
-        self.last_search_start = start_date_str # Store raw string for now
-        self.last_search_end = end_date_str   # Store raw string for now
+        self.last_search_start = start_date_str
+        self.last_search_end = end_date_str
 
-        # Basic Date Validation (more robust validation could be added)
+        # --- Date Validation ---
         start_date_validated = None
         if start_date_str:
-            try: datetime.datetime.strptime(start_date_str, '%Y-%m-%d'); start_date_validated = start_date_str
+            try: datetime.strptime(start_date_str, '%Y-%m-%d'); start_date_validated = start_date_str
             except ValueError: messagebox.showerror("Input Error", "Invalid Start Date format. Use YYYY-MM-DD."); return
         end_date_validated = None
         if end_date_str:
-            try: datetime.datetime.strptime(end_date_str, '%Y-%m-%d'); end_date_validated = end_date_str
+            try: datetime.strptime(end_date_str, '%Y-%m-%d'); end_date_validated = end_date_str
             except ValueError: messagebox.showerror("Input Error", "Invalid End Date format. Use YYYY-MM-DD."); return
         if start_date_validated and end_date_validated and start_date_validated > end_date_validated:
             messagebox.showerror("Input Error", "Start Date cannot be after End Date."); return
+        # --- End Date Validation ---
 
-        print(f"Executing search: Player='{player_filter or 'Any'}', Start='{start_date_validated or 'N/A'}', End='{end_date_validated or 'N/A'}'")
+        # Determine the player name to pass to the fetch function
+        # If the selection is the empty string "", pass None to fetch all players
+        player_name_to_fetch = player_filter if player_filter else None
+
+        print(f"Executing search: Player='{player_name_to_fetch or 'Any'}', Start='{start_date_validated or 'N/A'}', End='{end_date_validated or 'N/A'}'")
         self.status_label.config(text="Searching records...", foreground="blue")
 
-        # Fetch data using the filters
+        # --- Fetch data using the filters ---
         records = self._fetch_game_data(
             columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos",
-            order_by="game_date DESC, id DESC", # Or allow user sorting later
+            order_by="game_date DESC, id DESC",
             start_date=start_date_validated,
             end_date=end_date_validated,
-            player_name=player_filter if player_filter else None # Pass None if "Any Player"
+            player_name=player_name_to_fetch # Pass the potentially None player name
         )
 
-        # Clear previous results
+        # --- Clear previous results ---
         for item in tree.get_children():
             tree.delete(item)
 
-        # Populate treeview
+        # --- Populate treeview ---
         if records:
             for record in records:
-                # Ensure record has the expected number of columns before inserting
                 if len(record) == 8:
                     tree.insert('', tk.END, values=record)
                 else:
@@ -1409,7 +1488,7 @@ class GameRecorderApp:
         elif records is not None: # Fetch was successful but returned empty
             self.status_label.config(text="No records found matching criteria.", foreground="blue")
             print("Search complete. No matching records found.")
-        else: # Fetch failed (error message already shown by _fetch_game_data)
+        else: # Fetch failed
              self.status_label.config(text="Search failed.", foreground="red")
 
 
@@ -1835,7 +1914,7 @@ class GameRecorderApp:
             print("Add player cancelled.")
             return
 
-        new_name = new_name_raw.strip().title() # Clean and title-case
+        new_name = new_name_raw.strip() # Clean and title-case
 
         if not new_name:
             messagebox.showwarning("Invalid Name", "Player name cannot be empty.", parent=self.root)
@@ -1933,6 +2012,7 @@ class GameRecorderApp:
 
     def open_admin_tools_dialog(self):
         """Opens a separate window for Database Administration tasks."""
+        # Use instance variable for dialog reference
         self.admin_main_dialog = tk.Toplevel(self.root)
         self.admin_main_dialog.title("Admin Tools")
         self.admin_main_dialog.transient(self.root)
@@ -1945,8 +2025,8 @@ class GameRecorderApp:
         admin_actions = {
             "search_view": "Search/View Records",
             "add_player": "Add Player",
-            "view_players": "View Players", # Command will be changed
-            "backup_db": "Backup Database"
+            "view_players": "View Players",
+            "backup_db": "Backup Database" # Command will be changed
         }
 
         current_row = 0
@@ -1955,11 +2035,13 @@ class GameRecorderApp:
                 button = ttk.Button(dialog_frame, text=text, command=self.open_search_view_window)
             elif key == "add_player":
                 button = ttk.Button(dialog_frame, text=text, command=self._add_player)
-            # --- CHANGE COMMAND FOR VIEW PLAYERS ---
             elif key == "view_players":
-                button = ttk.Button(dialog_frame, text=text, command=self.open_view_players_window) # Call new method
+                button = ttk.Button(dialog_frame, text=text, command=self.open_view_players_window)
+            # --- CHANGE COMMAND FOR BACKUP DB ---
+            elif key == "backup_db":
+                button = ttk.Button(dialog_frame, text=text, command=self._backup_database) # Call new method
             # --- END CHANGE ---
-            else: # Placeholder for others (Backup DB)
+            else: # Placeholder for any future buttons
                 button = ttk.Button(dialog_frame, text=text,
                                     command=lambda action=text: self._admin_action_placeholder(action, parent_dialog=self.admin_main_dialog))
             button.grid(row=current_row, column=0, sticky=tk.EW, padx=10, pady=4)
@@ -2274,14 +2356,14 @@ class GameRecorderApp:
 
         ttk.Label(date_frame, text="End Date:").grid(row=0, column=3, sticky=tk.W, padx=(10, 5), pady=3)
         end_date_entry = ttk.Entry(date_frame, width=12)
-        end_date_entry.insert(0, datetime.date.today().strftime('%Y-%m-%d'))
+        # --- CORRECTED LINE ---
+        end_date_entry.insert(0, date.today().strftime('%Y-%m-%d')) # Use imported 'date' directly
+        # --- END CORRECTION ---
         end_date_entry.grid(row=0, column=4, sticky=(tk.W, tk.E), padx=5, pady=3)
 
         if TKCALENDAR_AVAILABLE:
-            # --- MODIFY LAMBDA COMMANDS HERE ---
             start_cal_button = ttk.Button(
                 date_frame, text="...", width=3,
-                # Pass both the entry and the dialog (the parent)
                 command=lambda entry=start_date_entry, parent=dialog:
                     self._open_calendar_for_entry(entry, parent)
             )
@@ -2289,12 +2371,10 @@ class GameRecorderApp:
 
             end_cal_button = ttk.Button(
                 date_frame, text="...", width=3,
-                # Pass both the entry and the dialog (the parent)
                 command=lambda entry=end_date_entry, parent=dialog:
                     self._open_calendar_for_entry(entry, parent)
             )
             end_cal_button.grid(row=0, column=5, sticky=tk.W, padx=(0, 5), pady=3)
-            # --- END MODIFICATION ---
 
         # -- Row 1: Quick Date Range Buttons --
         quick_button_frame = ttk.Frame(date_frame)
@@ -2358,25 +2438,38 @@ class GameRecorderApp:
             messagebox.showwarning("No Selection", "Please select at least one report section.", parent=dialog_window)
             return
 
-        start_date_validated, end_date_validated = None, None
+        # --- Date Validation ---
+        start_date_validated = None
+        end_date_validated = None
         error_messages = []
+
+        print(f"DEBUG: Inside generate_custom_report, type(datetime) is: {type(datetime)}")
+
         start_date_str = start_date_str.strip()
         if start_date_str:
             try:
-                datetime.datetime.strptime(start_date_str, '%Y-%m-%d')
+                # --- CORRECTED CALL for Start Date ---
+                datetime.strptime(start_date_str, '%Y-%m-%d') # Use imported datetime class directly
                 start_date_validated = start_date_str
-            except ValueError: error_messages.append(f"Invalid Start Date format: '{start_date_str}'. Use YYYY-MM-DD or leave blank.")
+            except ValueError:
+                error_messages.append(f"Invalid Start Date format: '{start_date_str}'. Use YYYY-MM-DD or leave blank.")
+
         end_date_str = end_date_str.strip()
         if end_date_str:
             try:
-                datetime.datetime.strptime(end_date_str, '%Y-%m-%d')
+                # --- CORRECTED CALL for End Date ---
+                datetime.strptime(end_date_str, '%Y-%m-%d') # Use imported datetime class directly
                 end_date_validated = end_date_str
-            except ValueError: error_messages.append(f"Invalid End Date format: '{end_date_str}'. Use YYYY-MM-DD or leave blank.")
+            except ValueError:
+                error_messages.append(f"Invalid End Date format: '{end_date_str}'. Use YYYY-MM-DD or leave blank.")
+
         if start_date_validated and end_date_validated and start_date_validated > end_date_validated:
              error_messages.append("Start Date cannot be after End Date.")
+
         if error_messages:
             messagebox.showerror("Date Error", "\n".join(error_messages), parent=dialog_window)
             return
+        # --- End Date Validation ---
 
         print(f"Generating custom report for sections: {[key for key, sel in selected_sections.items() if sel]}")
         print(f"Date Range: Start='{start_date_validated or 'Any'}' End='{end_date_validated or 'Any'}'")
@@ -2399,7 +2492,7 @@ class GameRecorderApp:
             self.status_label.config(text="No records found for specified criteria.", foreground="blue")
             return
 
-        player_stats_list, h2h_stats, all_players_in_range = None, None, None # Changed variable name
+        player_stats_list, h2h_stats, all_players_in_range = None, None, None
         player_games = None
         bingo_stats_results = None
 
@@ -2408,7 +2501,6 @@ class GameRecorderApp:
                                        selected_sections.get("h2h") or
                                        any(selected_sections.get(key) for key in selected_sections if key.startswith('bingo')))
             if needs_player_stats_calc:
-                 # Unpack the new return values, including all_players_in_range
                  player_stats_list, h2h_stats, all_players_in_range, player_games = self._calculate_player_and_h2h_stats(records)
 
             needs_bingo_stats_calc = any(selected_sections.get(key) for key in ["bingo_avg", "bingo_avg_rank_7", "bingo_avg_rank_8", "bingo_high_rank_7", "bingo_high_rank_8"])
@@ -2435,27 +2527,21 @@ class GameRecorderApp:
                  report_parts.append(date_range_text)
                  report_parts.append("-" * len(date_range_text))
 
-            if selected_sections.get("all_games"):
-                report_parts.append(self._generate_all_games_list_text(records))
-
+            if selected_sections.get("all_games"): report_parts.append(self._generate_all_games_list_text(records))
             if selected_sections.get("player_summary"):
                 if player_stats_list is not None: report_parts.append(self._generate_player_summary_text(player_stats_list))
                 else: report_parts.append("\n--- Player Win/Loss Records ---\nData not available.")
-
             if selected_sections.get("h2h"):
-                # Pass the correct list (all_players_in_range) to the H2H formatter
-                if h2h_stats is not None and all_players_in_range is not None:
-                    report_parts.append(self._generate_h2h_text(h2h_stats, all_players_in_range)) # Use all_players_in_range
+                if h2h_stats is not None and all_players_in_range is not None: report_parts.append(self._generate_h2h_text(h2h_stats, all_players_in_range))
                 else: report_parts.append("\n--- Head-to-Head Records ---\nData not available.")
 
             bingo_section_selected = any(selected_sections.get(key) for key in selected_sections if key.startswith('bingo'))
             if bingo_section_selected:
                 report_parts.append("\n--- Bingo Statistics ---")
                 if bingo_stats_results:
-                    active_players_for_bingo = bingo_stats_results.get('active_players') # Use players from bingo calc if available
-                    if not active_players_for_bingo and all_players_in_range: active_players_for_bingo = all_players_in_range # Fallback
+                    active_players_for_bingo = bingo_stats_results.get('active_players')
+                    if not active_players_for_bingo and all_players_in_range: active_players_for_bingo = all_players_in_range
                     elif not active_players_for_bingo: active_players_for_bingo = []
-
                     if selected_sections.get("bingo_avg"): report_parts.append(self._generate_bingo_avg_text(bingo_stats_results['avg_bingos_per_game'], active_players_for_bingo))
                     if selected_sections.get("bingo_avg_rank_7"): report_parts.append(self._generate_bingo_avg_rank_7_text(bingo_stats_results['avg_rank_7'], bingo_stats_results['has_7_map'], active_players_for_bingo))
                     if selected_sections.get("bingo_avg_rank_8"): report_parts.append(self._generate_bingo_avg_rank_8_text(bingo_stats_results['avg_rank_8'], bingo_stats_results['has_8_map'], active_players_for_bingo))
@@ -2472,7 +2558,7 @@ class GameRecorderApp:
              return
 
         final_report_text = "\n".join(report_parts)
-        default_filename = f"scrabble_custom_report_{datetime.date.today().strftime('%Y-%m-%d')}.txt"
+        default_filename = f"scrabble_custom_report_{date.today().strftime('%Y-%m-%d')}.txt"
         filepath = filedialog.asksaveasfilename(
             defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
             initialfile=default_filename, title="Save Custom Report As"
