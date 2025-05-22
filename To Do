@@ -19,8 +19,6 @@ _________
 
 -- Need support for 9+-letter bingos
 
--- List all bingos by a player along with their probability
-
 -- Head-to-head comparison of two players??
 
 -- Create a "Full Player Report" which has basically everything possible about that one player
@@ -82,6 +80,9 @@ _________
 -- Total number of games
 
 -- Need option to either save to text file or open in window.
+
+-- List all bingos by a player along with their probability
+
 
 
 
