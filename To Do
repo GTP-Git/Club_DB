@@ -8,25 +8,20 @@ _________
 
 -- When the program is deploayed, I will update it. The update MUST maintain the current db. How to?
 
+-- Button that reports total number of records
+
 Data Entry
 _________
 
--- When entering bingos, should we add a word validation warning. Caution: ANEROOD is not a valid word. Enter anyway? This will allow the entry of phonies or catch errors.
 
 Reports
 _________
 
 -- Need support for 9+-letter bingos
 
--- Highest game score
-
--- Total number of games
-
 -- List all bingos by a player along with their probability
 
 -- Head-to-head comparison of two players??
-
--- Need option to either save to text file or open in window.
 
 -- Create a "Full Player Report" which has basically everything possible about that one player
 
@@ -53,11 +48,8 @@ _________
 
 -- Running average of bingo prob by player?
 
--- Show heatmap by W/L record, as well as by win%
-
 -- Scatterplot of bingos by prob by player(s)
 
--- -- Need option to either save to text file or open in window.
 
 
 
@@ -79,6 +71,19 @@ _________
 
 -- Add date range picker for reports
 
+-- When entering bingos, should we add a word validation warning. Caution: ANEROOD is not a valid word. Enter anyway? This will allow the entry of phonies or catch errors.
+
 -- Make reports dynamically sized
+
+-- Show heatmap by W/L record, as well as by win%
+
+-- Highest game score
+
+-- Total number of games
+
+-- Need option to either save to text file or open in window.
+
+
+
 
 
