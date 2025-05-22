@@ -1,0 +1,2663 @@
+
+
+# Club 22MAY25 V3 - Modified with Rating-Based Test Data
+
+import tkinter as tk
+from tkinter import ttk
+from tkinter import messagebox
+from tkinter import filedialog
+from tkinter import simpledialog
+import sqlite3
+import time
+import os
+import re
+import sys # Needed for debug print in graph funcs
+from collections import defaultdict
+import random # Need more functions from random
+import shutil
+from datetime import date, datetime, timedelta
+
+# --- Dependency Imports & Checks ---
+try:
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    matplotlib.use('TkAgg')
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    print("Warning: Matplotlib not found. Graphing functionality will be disabled.")
+    print("Install it using: pip install matplotlib")
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    print("Warning: Pandas not found. Some graphing functionality will be disabled.")
+    print("Install it using: pip install pandas")
+
+try:
+    import seaborn as sns
+    SEABORN_AVAILABLE = True
+except ImportError:
+    SEABORN_AVAILABLE = False
+    print("Warning: Seaborn not found. Heatmap graph will be disabled.")
+    print("Install it using: pip install seaborn")
+
+try:
+    import numpy as np # Import as np
+    NUMPY_AVAILABLE = True
+    print("Numpy found. Some graphs will have enhanced features (e.g., color gradients).")
+except ImportError:
+    NUMPY_AVAILABLE = False
+    np = None # Define np as None if import fails
+    print("Warning: Numpy not found. Some graphs (e.g., Box Plot, Bar Gradients) may not work as intended.")
+    print("Install it using: pip install numpy")
+
+try:
+    import tkcalendar
+    TKCALENDAR_AVAILABLE = True
+    print("tkcalendar found. Date picker will use calendar widgets.")
+except ImportError:
+    TKCALENDAR_AVAILABLE = False
+    print("Warning: tkcalendar not found. Falling back to manual date entry.")
+    print("Install it for a calendar picker: pip install tkcalendar")
+
+# Combined checks
+ALL_GRAPH_DEPS_AVAILABLE = MATPLOTLIB_AVAILABLE and PANDAS_AVAILABLE
+HEATMAP_DEPS_AVAILABLE = ALL_GRAPH_DEPS_AVAILABLE and SEABORN_AVAILABLE
+BOXPLOT_DEPS_AVAILABLE = ALL_GRAPH_DEPS_AVAILABLE and NUMPY_AVAILABLE
+
+
+# --- Constants ---
+DB_NAME = "game_records.db"
+PLAYER_CONFIG_FILE = "player_list.txt"
+PLAYER_RATINGS_FILE = "player_ratings.txt" # For persistent ratings
+
+MIN_GAMES_FOR_BOXPLOT = 3
+FILE_7_LETTER = "7-letter-list.txt"
+FILE_8_LETTER = "8-letter-list.txt"
+
+# --- Constants for Rating-Based Generation ---
+MIN_RATING = 750
+MAX_RATING = 2100
+MEAN_SCORE_MIN = 300 # Target mean score for MIN_RATING
+MEAN_SCORE_MAX = 430 # Target mean score for MAX_RATING
+SCORE_STD_DEV = 55   # Standard deviation for score generation
+SCORE_RATING_DIFF_FACTOR = 0.1 # How much rating diff affects score (e.g., 100 rating diff -> +/- 10 score points)
+MIN_SCORE_CLAMP = 200 # Absolute min score allowed
+MAX_SCORE_CLAMP = 650 # Absolute max score allowed
+
+MEAN_BINGO_MIN = 0.5 # Target avg bingos for MIN_RATING
+MEAN_BINGO_MAX = 2.5 # Target avg bingos for MAX_RATING
+MAX_BINGO_CLAMP = 5  # Absolute max bingos allowed
+
+APP_PLAYER_LIST = [] # Populated by load_player_names
+
+
+# --- Player List Load/Save Functions ---
+def load_player_names():
+    """Loads player names from the config file, creates it with defaults if missing."""
+    global APP_PLAYER_LIST
+    # Default list provided by user
+    default_players = [
+        "Thao Smith", "Joe South", "Alan South", "Robert Fenske", "Mariah Smith",
+        "Matt De Waelsche", "Jennifer De Waelsche", "Alex Rivard", "Bob Rivard",
+        "Matt Canik", "Henry Moses", "Greg Smith", "Greg Stone", "Norma DeJesus"
+    ]
+    players = []
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        filepath = os.path.join(script_dir, PLAYER_CONFIG_FILE)
+        if not os.path.exists(filepath):
+            print(f"'{PLAYER_CONFIG_FILE}' not found. Creating with default players.")
+            players = sorted([p.strip() for p in default_players if p.strip()], key=str.lower)
+            try:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    for name in players: f.write(name + '\n')
+            except IOError as e: print(f"Error: Could not write default player list to '{filepath}': {e}")
+        else:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                players = sorted([line.strip() for line in f if line.strip()], key=str.lower)
+            print(f"Loaded {len(players)} players from '{PLAYER_CONFIG_FILE}'.")
+    except IOError as e:
+        print(f"Error reading player list file '{PLAYER_CONFIG_FILE}': {e}\nUsing default player list as fallback.")
+        players = sorted([p.strip() for p in default_players if p.strip()], key=str.lower)
+    except Exception as e:
+        print(f"An unexpected error occurred loading player list: {e}\nUsing default player list as fallback.")
+        players = sorted([p.strip() for p in default_players if p.strip()], key=str.lower)
+    APP_PLAYER_LIST = players
+
+def save_player_names():
+    """Saves the current APP_PLAYER_LIST (sorted) to the config file."""
+    global APP_PLAYER_LIST
+    APP_PLAYER_LIST = sorted(APP_PLAYER_LIST, key=str.lower) # Ensure sorted
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        filepath = os.path.join(script_dir, PLAYER_CONFIG_FILE)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            for name in APP_PLAYER_LIST: f.write(name + '\n')
+        print(f"Saved {len(APP_PLAYER_LIST)} players to '{PLAYER_CONFIG_FILE}'.")
+    except IOError as e:
+        print(f"Error: Could not save player list to '{PLAYER_CONFIG_FILE}': {e}")
+        messagebox.showerror("File Error", f"Could not save player list: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred saving player list: {e}")
+        messagebox.showerror("Error", f"Could not save player list: {e}")
+
+
+def load_player_ratings(filepath=PLAYER_RATINGS_FILE):
+    """Loads player ratings from the specified file."""
+    ratings = {}
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    full_path = os.path.join(script_dir, filepath)
+    if not os.path.exists(full_path):
+        print(f"Ratings file '{filepath}' not found. Will assign new ratings.")
+        return ratings # Return empty dict if file doesn't exist
+    try:
+        with open(full_path, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                line_stripped = line.strip()
+                if not line_stripped: # Skip empty lines
+                    continue
+
+                # --- Corrected Splitting ---
+                # Split from the right, separating only the last element (rating)
+                parts = line_stripped.rsplit(maxsplit=1)
+                # --- End Correction ---
+
+                if len(parts) == 2:
+                    # The first part is now the full name (potentially with spaces)
+                    name = parts[0].strip()
+                    rating_str = parts[1].strip()
+                    try:
+                        rating = int(rating_str)
+                        if MIN_RATING <= rating <= MAX_RATING:
+                             ratings[name] = rating
+                        else:
+                             print(f"Warning: Rating {rating} for '{name}' in {filepath} (line {i+1}) is outside range [{MIN_RATING}-{MAX_RATING}]. Ignoring.")
+                    except ValueError:
+                        # This error should now only happen if the rating part isn't a number
+                        print(f"Warning: Invalid rating value '{rating_str}' for '{name}' in {filepath} (line {i+1}). Ignoring line: '{line_stripped}'")
+                elif line_stripped: # Non-empty line that didn't split correctly
+                     print(f"Warning: Malformed line in {filepath} (line {i+1}). Expected '[Name] [Rating]'. Ignoring line: '{line_stripped}'")
+        print(f"Loaded {len(ratings)} ratings from '{filepath}'.")
+    except IOError as e:
+        print(f"Error reading ratings file '{filepath}': {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred loading ratings: {e}")
+    return ratings
+
+
+
+def save_player_ratings(ratings_dict, filepath=PLAYER_RATINGS_FILE):
+    """Saves the player ratings dictionary to the specified file."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    full_path = os.path.join(script_dir, filepath)
+    try:
+        # Sort by name before saving for consistency
+        sorted_items = sorted(ratings_dict.items())
+        with open(full_path, 'w', encoding='utf-8') as f:
+            for name, rating in sorted_items:
+                f.write(f"{name} {rating}\n") # Use space separator
+        print(f"Saved {len(ratings_dict)} ratings to '{filepath}'.")
+    except IOError as e:
+        print(f"Error: Could not save ratings to '{filepath}': {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred saving ratings: {e}")
+
+
+
+def assign_initial_ratings(player_list, existing_ratings):
+    """Assigns random ratings to players in list if they don't have one."""
+    updated_ratings = existing_ratings.copy()
+    ratings_changed = False
+    print("Assigning initial ratings where needed...")
+    for player in player_list:
+        if player not in updated_ratings:
+            new_rating = random.randint(MIN_RATING, MAX_RATING)
+            updated_ratings[player] = new_rating
+            print(f"  Assigned rating {new_rating} to new player: {player}")
+            ratings_changed = True
+    if not ratings_changed:
+        print("  No new players found requiring initial ratings.")
+    return updated_ratings, ratings_changed
+
+
+# --- Load Word Lists ---
+def load_word_list(filename):
+    """Loads words from a file, strips whitespace, converts to uppercase."""
+    words = []
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        filepath = os.path.join(script_dir, filename)
+        with open(filepath, 'r', encoding='utf-8') as f:
+            words = [line.strip().upper() for line in f if line.strip()]
+        print(f"Successfully loaded {len(words)} words from {filepath}.")
+    except FileNotFoundError:
+        print(f"Error: Word list file not found: {filename} (expected in script directory: {script_dir})")
+    except Exception as e: print(f"Error reading {filename}: {e}")
+    return words
+
+WORD_LIST_7 = load_word_list(FILE_7_LETTER)
+WORD_LIST_8 = load_word_list(FILE_8_LETTER)
+COMBINED_WORD_LIST = WORD_LIST_7 + WORD_LIST_8
+if not COMBINED_WORD_LIST: print("Warning: No words loaded. Test data bingos will be empty.")
+WORD_7_INDEX_MAP = {word: i + 1 for i, word in enumerate(WORD_LIST_7)} if WORD_LIST_7 else {}
+WORD_8_INDEX_MAP = {word: i + 1 for i, word in enumerate(WORD_LIST_8)} if WORD_LIST_8 else {}
+print(f"Created index map for {len(WORD_7_INDEX_MAP)} 7-letter words.")
+print(f"Created index map for {len(WORD_8_INDEX_MAP)} 8-letter words.")
+
+
+# --- Database Setup ---
+def setup_database():
+    """Creates the database and table with the correct schema if they don't exist."""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS games (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_date TEXT NOT NULL,
+                player1_name TEXT,
+                player1_score INTEGER,
+                player1_bingos TEXT,
+                player2_name TEXT,
+                player2_score INTEGER,
+                player2_bingos TEXT
+            )
+        ''')
+        conn.commit()
+        print(f"Database '{DB_NAME}' setup complete.")
+    except sqlite3.Error as e:
+        print(f"Database error during setup: {e}")
+        messagebox.showerror("Database Error", f"Could not set up database: {e}")
+    finally:
+        if conn: conn.close()
+
+
+# --- Rating-Based Data Generation Helpers ---
+def _map_rating_to_mean_score(rating):
+    """Linearly maps rating to target mean score."""
+    # Ensure rating is within bounds for calculation
+    rating_clamped = max(MIN_RATING, min(MAX_RATING, rating))
+    # Calculate proportion along the rating range
+    rating_proportion = (rating_clamped - MIN_RATING) / (MAX_RATING - MIN_RATING)
+    # Map to score range
+    mean_score = MEAN_SCORE_MIN + rating_proportion * (MEAN_SCORE_MAX - MEAN_SCORE_MIN)
+    return mean_score
+
+def _map_rating_to_bingo_lambda(rating):
+    """Linearly maps rating to target mean bingo count (lambda for Poisson)."""
+    rating_clamped = max(MIN_RATING, min(MAX_RATING, rating))
+    rating_proportion = (rating_clamped - MIN_RATING) / (MAX_RATING - MIN_RATING)
+    mean_bingos = MEAN_BINGO_MIN + rating_proportion * (MEAN_BINGO_MAX - MEAN_BINGO_MIN)
+    # Ensure lambda is slightly positive for Poisson
+    return max(0.1, mean_bingos)
+
+
+# --- Test Data Generation Function (Rating-Based) ---
+def generate_test_data(num_records=50):
+    """Generates random game records using player ratings to influence scores/bingos."""
+    print(f"Attempting to generate {num_records} rating-based test records...")
+
+    # 1. Load current ratings
+    player_ratings = load_player_ratings()
+
+    # 2. Ensure all players in APP_PLAYER_LIST have a rating
+    player_ratings, ratings_were_updated = assign_initial_ratings(APP_PLAYER_LIST, player_ratings)
+
+    # 3. Save ratings if any new ones were assigned
+    if ratings_were_updated:
+        save_player_ratings(player_ratings)
+
+    # 4. Check if we have enough players and words
+    valid_player_names = [name for name in APP_PLAYER_LIST if name]
+    if len(valid_player_names) < 2:
+        print("Error: Need at least 2 valid player names loaded to generate games.")
+        return
+    available_words = COMBINED_WORD_LIST
+    can_generate_bingos = bool(available_words)
+    if not can_generate_bingos:
+        print("Warning: No word list loaded, cannot generate bingos.")
+
+    conn = None
+    added_count = 0
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        today = date.today()
+
+        for i in range(num_records):
+            game_date = (today - timedelta(days=random.randint(0, 730))).strftime('%Y-%m-%d')
+
+            # Select players and get their ratings
+            p1_name, p2_name = random.sample(valid_player_names, 2)
+            p1_rating = player_ratings.get(p1_name, (MIN_RATING + MAX_RATING) // 2) # Default if somehow missing
+            p2_rating = player_ratings.get(p2_name, (MIN_RATING + MAX_RATING) // 2)
+
+            # --- Generate Scores based on Rating ---
+            p1_mean_target = _map_rating_to_mean_score(p1_rating)
+            p2_mean_target = _map_rating_to_mean_score(p2_rating)
+
+            # Add opponent interaction effect
+            rating_diff_effect = (p1_rating - p2_rating) * SCORE_RATING_DIFF_FACTOR
+            p1_adjusted_mean = p1_mean_target + rating_diff_effect
+            p2_adjusted_mean = p2_mean_target - rating_diff_effect
+
+            # Generate scores using normal distribution
+            p1_score_raw = random.normalvariate(p1_adjusted_mean, SCORE_STD_DEV)
+            p2_score_raw = random.normalvariate(p2_adjusted_mean, SCORE_STD_DEV)
+
+            # Clamp scores and convert to integer
+            p1_score = int(max(MIN_SCORE_CLAMP, min(MAX_SCORE_CLAMP, p1_score_raw)))
+            p2_score = int(max(MIN_SCORE_CLAMP, min(MAX_SCORE_CLAMP, p2_score_raw)))
+
+            # --- Generate Bingos based on Rating ---
+            p1_bingos_str = ""
+            if can_generate_bingos:
+                p1_lambda = _map_rating_to_bingo_lambda(p1_rating)
+                # Generate count using numpy if available, otherwise fallback
+                if NUMPY_AVAILABLE and np:
+                    num_bingos_p1_raw = np.random.poisson(p1_lambda)
+                else:
+                    # Fallback: normal distribution around lambda, ensure non-negative int
+                    num_bingos_p1_raw = int(max(0, random.normalvariate(p1_lambda, 1.0)))
+
+                num_bingos_p1 = min(MAX_BINGO_CLAMP, num_bingos_p1_raw) # Clamp max
+                k = min(num_bingos_p1, len(available_words)) # Ensure not more than available words
+
+                # --- Corrected Indentation Below ---
+                if k > 0:
+                    p1_bingos_list = random.sample(available_words, k)
+                else:
+                    p1_bingos_list = []
+                p1_bingos_str = ", ".join(sorted(p1_bingos_list))
+                # --- End Corrected Indentation ---
+
+            p2_bingos_str = ""
+            if can_generate_bingos:
+                p2_lambda = _map_rating_to_bingo_lambda(p2_rating)
+                # Generate count using numpy if available, otherwise fallback
+                if NUMPY_AVAILABLE and np:
+                    num_bingos_p2_raw = np.random.poisson(p2_lambda)
+                else:
+                    # Fallback: normal distribution around lambda, ensure non-negative int
+                    num_bingos_p2_raw = int(max(0, random.normalvariate(p2_lambda, 1.0)))
+
+                num_bingos_p2 = min(MAX_BINGO_CLAMP, num_bingos_p2_raw) # Clamp max
+                k = min(num_bingos_p2, len(available_words)) # Ensure not more than available words
+
+                # --- Corrected Indentation Below ---
+                if k > 0:
+                    p2_bingos_list = random.sample(available_words, k)
+                else:
+                    p2_bingos_list = []
+                p2_bingos_str = ", ".join(sorted(p2_bingos_list))
+
+            # --- Insert into DB ---
+            cursor.execute('''
+                INSERT INTO games (game_date, player1_name, player1_score, player1_bingos,
+                                   player2_name, player2_score, player2_bingos)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (game_date, p1_name, p1_score, p1_bingos_str, p2_name, p2_score, p2_bingos_str))
+            added_count += 1
+
+        conn.commit()
+        print(f"Successfully generated and added {added_count} rating-based test records.")
+    except sqlite3.Error as e:
+        print(f"Database error during test data generation: {e}")
+        messagebox.showerror("Database Error", f"Failed to generate test data: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during test data generation: {e}")
+        messagebox.showerror("Error", f"Unexpected error generating test data: {e}")
+    finally:
+        if conn: conn.close()
+
+
+class GameRecorderApp:
+
+    # --- __init__ (Constructor) ---
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Game Score Recorder")
+
+        main_frame = ttk.Frame(root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+
+        input_frame = ttk.LabelFrame(main_frame, text="Record New Game", padding="10")
+        input_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        input_frame.columnconfigure(1, weight=1)
+
+        current_row = 0
+        ttk.Label(input_frame, text="Date:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.date_entry = ttk.Entry(input_frame, width=40)
+        self.date_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
+        try: self.date_entry.insert(0, date.today().strftime('%Y-%m-%d'))
+        except Exception as e: print(f"ERROR during date insertion: {e}"); self.date_entry.insert(0, "YYYY-MM-DD")
+        current_row += 1
+
+        ttk.Label(input_frame, text="Player 1 Name:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p1_name_combo = ttk.Combobox(input_frame, width=38, values=[""], state='readonly')
+        self.p1_name_combo.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
+        current_row += 1
+
+        ttk.Label(input_frame, text="Player 1 Score:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p1_score_entry = ttk.Entry(input_frame, width=15)
+        self.p1_score_entry.grid(row=current_row, column=1, sticky=tk.W, pady=2, padx=5)
+        current_row += 1
+        ttk.Label(input_frame, text="Player 1 Bingos:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p1_bingos_entry = ttk.Entry(input_frame, width=40)
+        self.p1_bingos_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
+        current_row += 1
+
+        ttk.Label(input_frame, text="Player 2 Name:").grid(row=current_row, column=0, sticky=tk.W, pady=(10, 2), padx=5)
+        self.p2_name_combo = ttk.Combobox(input_frame, width=38, values=[""], state='readonly')
+        self.p2_name_combo.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(10, 2), padx=5)
+        current_row += 1
+
+        ttk.Label(input_frame, text="Player 2 Score:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p2_score_entry = ttk.Entry(input_frame, width=15)
+        self.p2_score_entry.grid(row=current_row, column=1, sticky=tk.W, pady=2, padx=5)
+        current_row += 1
+        ttk.Label(input_frame, text="Player 2 Bingos:").grid(row=current_row, column=0, sticky=tk.W, pady=2, padx=5)
+        self.p2_bingos_entry = ttk.Entry(input_frame, width=40)
+        self.p2_bingos_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=2, padx=5)
+        current_row += 1
+
+        # --- This is where the error occurred ---
+        self.add_record_button = ttk.Button(main_frame, text="Add Record", command=self.save_record)
+        self.add_record_button.grid(row=1, column=0, pady=(5, 10), sticky=tk.EW)
+        # --- End error location ---
+
+        action_frame = ttk.LabelFrame(main_frame, text="Actions", padding="10")
+        action_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=10)
+        action_frame.columnconfigure(0, weight=1); action_frame.columnconfigure(1, weight=1); action_frame.columnconfigure(2, weight=1)
+
+        self.reports_button = ttk.Button(action_frame, text="Reports", command=self.open_report_picker_dialog)
+        self.reports_button.grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
+        graph_state = tk.NORMAL if ALL_GRAPH_DEPS_AVAILABLE else tk.DISABLED
+        self.graphs_button = ttk.Button(action_frame, text="Graphs", command=self.open_graph_picker_dialog, state=graph_state)
+        self.graphs_button.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        if not ALL_GRAPH_DEPS_AVAILABLE: print("Graphs button disabled due to missing dependencies (matplotlib/pandas).")
+        self.admin_button = ttk.Button(action_frame, text="Admin Tools", command=self.open_admin_tools_dialog)
+        self.admin_button.grid(row=0, column=2, padx=5, pady=5, sticky=tk.EW)
+
+        self.status_label = ttk.Label(main_frame, text="", relief=tk.SUNKEN, anchor=tk.W)
+        self.status_label.grid(row=3, column=0, pady=(5, 0), sticky=tk.EW)
+
+        # --- Report Tree Structure ---
+        self.report_tree_structure = [
+        ('verbal_summary_cat', "Verbal Summary", {'verbal_summary_report': ("Generate Player Verbal Summary", {})}), # New report at the top
+        ('standings', "Standings", {'standings_summary': ("Player Win/Loss Summary", {})}),
+        ('game_lists', "Game Lists", {'games_all': ("List of All Games", {})}),
+        ('scoring', "Scoring", {'scoring_avg': ("Average Score", {}), 'scoring_high': ("Highest Score", {})}),
+        ('bingo_stats', "Bingo Statistics*", {
+             'all_bingos_by_prob': ("All Bingos By Probability*", {}),
+             'bingo_avg': ("Average Bingos Per Game", {}),
+             'bingo_avg_rank_7': ("Average 7-Letter Probability*", {}),
+             'bingo_avg_rank_8': ("Average 8-Letter Probability*", {}),
+             'bingo_high_rank_7': ("Highest 7-Letter Probability*", {}),
+             'bingo_high_rank_8': ("Highest 8-Letter Probability*", {}),
+             'bingo_win_abs': ('Win % By Absolute Bingos', {}),
+             'bingo_win_diff': ('Win % By Bingo Difference', {})})
+        ]
+        self.report_id_map = {
+            'verbal_summary_report': 'verbal_summary', # New mapping
+            'all_bingos_by_prob': 'all_player_bingos_by_index',
+            'standings_summary': 'player_summary', 'games_all': 'all_games', 'scoring_avg': 'scoring_avg',
+            'scoring_high': 'scoring_high', 'bingo_avg': 'bingo_avg', 'bingo_avg_rank_7': 'bingo_avg_rank_7',
+            'bingo_avg_rank_8': 'bingo_avg_rank_8', 'bingo_high_rank_7': 'bingo_high_rank_7',
+            'bingo_high_rank_8': 'bingo_high_rank_8', 'bingo_win_abs': 'bingo_win_abs', 'bingo_win_diff': 'bingo_win_diff',
+        }
+
+        # --- Graph Tree Structure ---
+        self.graph_tree_structure = [
+            ('distributions', "Distributions", {'dist_boxplot': ("Score Distribution (Box Plot)", {})}),
+            ('trends', "Trends", {'trend_line': ("Player Score Trend (Line)", {})}),
+            ('matchups', "Matchups", {
+                'matchup_pct_heatmap': ("Head-to-Head Win % (Heatmap)", {}),
+                'matchup_wl_heatmap': ("Head-to-Head W-L (Heatmap)", {})
+            }),
+            ('bingo_win_stats', "Bingo Win Statistics", {
+                'bingo_win_abs_bar': ("Win % by Absolute Bingos (Bar)", {}),
+                'bingo_win_diff_bar': ("Win % by Bingo Difference (Bar)", {})})
+        ]
+        self.graph_id_map = {
+            'dist_boxplot': 'boxplot', 'trend_line': 'trend',
+            'matchup_pct_heatmap': 'h2h_pct', 'matchup_wl_heatmap': 'h2h_wl',
+            'bingo_win_abs_bar': 'bingo_win_abs_bar', 'bingo_win_diff_bar': 'bingo_win_diff_bar'
+        }
+
+        self._update_all_player_comboboxes() # Populate main entry combos
+        print(f"DEBUG: APP_PLAYER_LIST at end of __init__: {APP_PLAYER_LIST}")
+
+    # --- Graph Selection and Generation ---
+    # (Includes open_graph_picker_dialog, generate_selected_graph)
+    def open_graph_picker_dialog(self):
+        """Opens a dialog window for graph selection."""
+        dialog = tk.Toplevel(self.root); dialog.title("Graph Picker"); dialog.transient(self.root)
+        dialog_frame = ttk.Frame(dialog, padding="10"); dialog_frame.pack(expand=True, fill=tk.BOTH)
+        date_frame = ttk.LabelFrame(dialog_frame, text="Date Range (Optional, YYYY-MM-DD)", padding="5"); date_frame.pack(fill=tk.X, pady=(0, 10))
+        date_frame.columnconfigure(1, weight=1); date_frame.columnconfigure(4, weight=1)
+        ttk.Label(date_frame, text="Start Date:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
+        start_date_entry = ttk.Entry(date_frame, width=12); start_date_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=3)
+        ttk.Label(date_frame, text="End Date:").grid(row=0, column=3, sticky=tk.W, padx=(10, 5), pady=3)
+        end_date_entry = ttk.Entry(date_frame, width=12); end_date_entry.grid(row=0, column=4, sticky=(tk.W, tk.E), padx=5, pady=3)
+        try: end_date_entry.insert(0, date.today().strftime('%Y-%m-%d'))
+        except Exception as e: print(f"Error setting default end date: {e}"); end_date_entry.insert(0, "YYYY-MM-DD")
+        if TKCALENDAR_AVAILABLE:
+            ttk.Button(date_frame, text="...", width=3, command=lambda entry=start_date_entry, parent=dialog: self._open_calendar_for_entry(entry, parent)).grid(row=0, column=2, sticky=tk.W, padx=(0, 5), pady=3)
+            ttk.Button(date_frame, text="...", width=3, command=lambda entry=end_date_entry, parent=dialog: self._open_calendar_for_entry(entry, parent)).grid(row=0, column=5, sticky=tk.W, padx=(0, 5), pady=3)
+        quick_button_frame = ttk.Frame(date_frame); quick_button_frame.grid(row=1, column=0, columnspan=6, pady=(5, 2), sticky=tk.EW)
+        for i in range(4): quick_button_frame.columnconfigure(i, weight=1)
+        ttk.Button(quick_button_frame, text="This Week", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_week(s, e)).grid(row=0, column=0, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="This Month", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_month(s, e)).grid(row=0, column=1, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="This Year", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_year(s, e)).grid(row=0, column=2, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="All Time", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_all(s, e)).grid(row=0, column=3, padx=2, sticky=tk.EW)
+        player_frame = ttk.LabelFrame(dialog_frame, text="Analysis Focus", padding="5"); player_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(player_frame, text="Analyze:").pack(side=tk.LEFT, padx=(5,5))
+        player_combo = ttk.Combobox(player_frame, state='readonly', width=30); self._populate_player_filter_combobox(player_combo, include_group_option=True); player_combo.current(0)
+        player_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,5), pady=5)
+        section_frame = ttk.LabelFrame(dialog_frame, text="Graph Types", padding="5"); section_frame.pack(expand=True, fill=tk.BOTH, pady=(0, 10))
+        graph_tree = ttk.Treeview(section_frame, selectmode='extended', show='tree', height=8); graph_tree.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5, pady=5)
+        tree_scrollbar = ttk.Scrollbar(section_frame, orient="vertical", command=graph_tree.yview); tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0,5), pady=5)
+        graph_tree.configure(yscrollcommand=tree_scrollbar.set)
+
+        def populate_graph_tree(parent_id, items):
+            for item_data in items:
+                item_id, display_name, children = item_data; node = graph_tree.insert(parent_id, tk.END, iid=item_id, text=display_name, open=True)
+                if children: child_items = [(k,) + v for k, v in children.items()]; populate_graph_tree(node, child_items)
+        populate_graph_tree('', self.graph_tree_structure)
+        button_frame = ttk.Frame(dialog_frame); button_frame.pack(fill=tk.X, pady=(5, 0)); button_frame.columnconfigure(0, weight=1); button_frame.columnconfigure(1, weight=0); button_frame.columnconfigure(2, weight=0)
+        ttk.Button(button_frame, text="Generate Graph(s)", command=lambda d=dialog, s=start_date_entry, e=end_date_entry, pc=player_combo, tree=graph_tree: self.generate_selected_graph(d, s.get(), e.get(), pc.get(), tree.selection())).grid(row=0, column=1, padx=5, pady=5, sticky=tk.E)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).grid(row=0, column=2, padx=5, pady=5, sticky=tk.E)
+        dialog.wait_window()
+
+    def generate_selected_graph(self, dialog_window, start_date_str, end_date_str, selected_player, selected_graph_ids):
+        """Generates the selected graph types from the Treeview."""
+        if not selected_graph_ids: messagebox.showwarning("No Selection", "Please select at least one graph type from the tree.", parent=dialog_window); return
+        group_analysis_text = "(Group Analysis)"; player_focus = None
+        if selected_player and selected_player != group_analysis_text:
+            if selected_player in APP_PLAYER_LIST: player_focus = selected_player
+            else: messagebox.showerror("Error", f"Invalid player selected: {selected_player}", parent=dialog_window); return
+        start_date_validated = None; end_date_validated = None; error_messages = []
+        start_date_str = start_date_str.strip()
+        if start_date_str:
+            try: datetime.strptime(start_date_str, '%Y-%m-%d'); start_date_validated = start_date_str
+            except ValueError: error_messages.append(f"Invalid Start Date format: '{start_date_str}'. Use YYYY-MM-DD or leave blank.")
+        end_date_str = end_date_str.strip()
+        if end_date_str:
+            try: datetime.strptime(end_date_str, '%Y-%m-%d'); end_date_validated = end_date_str
+            except ValueError: error_messages.append(f"Invalid End Date format: '{end_date_str}'. Use YYYY-MM-DD or leave blank.")
+        if start_date_validated and end_date_validated and start_date_validated > end_date_validated: error_messages.append("Start Date cannot be after End Date.")
+        if error_messages: messagebox.showerror("Date Error", "\n".join(error_messages), parent=dialog_window); return
+        if dialog_window and dialog_window.winfo_exists(): dialog_window.destroy()
+        print(f"Attempting to generate graphs for IDs: {selected_graph_ids}, Player: {player_focus or 'Group'}, Dates: {start_date_validated or 'Any'}-{end_date_validated or 'Any'}")
+        self.status_label.config(text=f"Generating selected graph(s)...", foreground="blue")
+        graphs_generated = 0
+        for graph_id in selected_graph_ids:
+            graph_type = self.graph_id_map.get(graph_id)
+            if not graph_type: print(f"Warning: Unknown graph ID selected: {graph_id}. Skipping."); continue
+            try:
+                print(f"Generating graph type: '{graph_type}'")
+                graph_processed_successfully = False
+                if graph_type == "boxplot": self.show_score_distribution_boxplot(start_date=start_date_validated, end_date=end_date_validated, player_focus=player_focus); graph_processed_successfully = True
+                elif graph_type == "trend": self.prompt_and_show_score_trend(start_date=start_date_validated, end_date=end_date_validated, player_focus=player_focus); graph_processed_successfully = True
+                elif graph_type == "h2h_pct": self.show_h2h_heatmap(start_date=start_date_validated, end_date=end_date_validated, player_focus=player_focus); graph_processed_successfully = True
+                elif graph_type == "h2h_wl": self.show_h2h_wl_heatmap(start_date=start_date_validated, end_date=end_date_validated, player_focus=player_focus); graph_processed_successfully = True
+                elif graph_type == "bingo_win_abs_bar": self.show_win_by_absolute_bingos_bar(start_date=start_date_validated, end_date=end_date_validated, player_focus=player_focus); graph_processed_successfully = True
+                elif graph_type == "bingo_win_diff_bar": self.show_win_by_bingo_difference_bar(start_date=start_date_validated, end_date=end_date_validated, player_focus=player_focus); graph_processed_successfully = True
+                else: messagebox.showerror("Error", f"Unknown graph type mapped: {graph_type}", parent=self.root); print(f"Error: Unknown graph type mapped: {graph_type}")
+                if graph_processed_successfully: graphs_generated += 1
+            except Exception as e:
+                 import traceback; print(f"Error generating graph '{graph_type}' (ID: {graph_id}): {e}"); traceback.print_exc()
+                 messagebox.showerror("Graphing Error", f"An unexpected error occurred while generating the {graph_type} graph:\n{e}", parent=self.root)
+                 self.status_label.config(text=f"Error generating {graph_type} graph.", foreground="red")
+        if graphs_generated > 0: self.status_label.config(text=f"Finished generating {graphs_generated} graph(s).", foreground="blue")
+        else: self.status_label.config(text="No graphs generated or all failed.", foreground="orange")
+
+    # --- Fetch Data Helper ---
+    def _fetch_game_data(self, columns="*", order_by=None, start_date=None, end_date=None, player_name=None):
+        """Helper to fetch specified columns from the games table."""
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+            safe_columns = "*"
+            if columns != "*":
+                 validated_cols = [col.strip() for col in columns.split(',') if col.strip().replace('_','').isalnum()]
+                 if validated_cols: safe_columns = ", ".join(validated_cols)
+                 else: print(f"Warning: Invalid columns requested: '{columns}'. Defaulting to '*'."); safe_columns = "*"
+            where_clauses = []; params = []
+            if player_name: where_clauses.append("(player1_name = ? OR player2_name = ?)"); params.extend([player_name, player_name])
+            if start_date: where_clauses.append("game_date >= ?"); params.append(start_date)
+            if end_date: where_clauses.append("game_date <= ?"); params.append(end_date)
+            query = f"SELECT {safe_columns} FROM games"
+            if where_clauses: query += " WHERE " + " AND ".join(where_clauses)
+            if order_by:
+                safe_order_by_parts = []
+                for part in order_by.split(','):
+                    part = part.strip(); col_parts = part.split(None, 1); col_name = col_parts[0]
+                    direction = col_parts[1].upper() if len(col_parts) > 1 else 'ASC'
+                    if col_name.replace('_','').isalnum() and direction in ['ASC', 'DESC']: safe_order_by_parts.append(f"{col_name} {direction}")
+                    else: print(f"Warning: Invalid part in ORDER BY clause ignored: '{part}'")
+                if safe_order_by_parts: query += f" ORDER BY {', '.join(safe_order_by_parts)}"
+                elif order_by.strip(): print(f"Warning: Invalid or empty ORDER BY clause after validation: '{order_by}'. Ignoring order.")
+            print(f"DEBUG: Executing query: {query} with params: {params}")
+            cursor.execute(query, params); return cursor.fetchall()
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Could not fetch game data: {e}", parent=self.root)
+            self.status_label.config(text=f"DB Fetch Error: {e}", foreground="red"); print(f"Database error during fetch: {e}"); return None
+        finally:
+            if conn: conn.close()
+
+
+
+    def _prompt_bingo_validation_dialog(self, word):
+        """
+        Displays a modal dialog to validate a bingo word.
+        Returns True if the user chooses to 'Enter Anyway', False otherwise.
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Bingo Word Validation")
+        dialog.transient(self.root)
+        dialog.grab_set() # Make modal
+
+        # Use an instance variable to store the dialog result,
+        # as wait_window() blocks and we need to retrieve the value after.
+        self._bingo_dialog_choice = False # Default to False (Back to Form)
+
+        message_frame = ttk.Frame(dialog, padding=(20, 20, 20, 10))
+        message_frame.pack(fill=tk.X)
+        message = f"Caution: The word '{word.upper()}' is not in the loaded word lists.\n\nEnter anyway?"
+        ttk.Label(message_frame, text=message, wraplength=350, justify=tk.CENTER, font=('Helvetica', 12)).pack()
+
+        button_frame = ttk.Frame(dialog, padding=(20, 10, 20, 20))
+        button_frame.pack(fill=tk.X)
+        # Configure columns to make buttons spread out a bit or center
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+        button_frame.columnconfigure(2, weight=1)
+
+
+        def on_enter_anyway():
+            self._bingo_dialog_choice = True
+            dialog.destroy()
+
+        def on_back_to_form():
+            self._bingo_dialog_choice = False
+            dialog.destroy()
+
+        enter_button = ttk.Button(button_frame, text="Enter Anyway", command=on_enter_anyway, width=15)
+        enter_button.grid(row=0, column=2, padx=(5,0), sticky=tk.E)
+
+        back_button = ttk.Button(button_frame, text="Back to Form", command=on_back_to_form, width=15)
+        back_button.grid(row=0, column=0, padx=(0,5), sticky=tk.W)
+
+        dialog.protocol("WM_DELETE_WINDOW", on_back_to_form) # Treat closing window as "Back"
+
+        # Center dialog on parent
+        dialog.update_idletasks()
+        parent_x = self.root.winfo_rootx()
+        parent_y = self.root.winfo_rooty()
+        parent_width = self.root.winfo_width()
+        parent_height = self.root.winfo_height()
+        dialog_width = dialog.winfo_width()
+        dialog_height = dialog.winfo_height()
+        x = parent_x + (parent_width // 2) - (dialog_width // 2)
+        y = parent_y + (parent_height // 2) - (dialog_height // 2)
+        dialog.geometry(f"+{x}+{y}")
+
+        enter_button.focus_set() # Set focus to the "Enter Anyway" button
+
+        dialog.wait_window()
+        return self._bingo_dialog_choice
+
+    # --- Core Methods ---
+    def save_record(self):
+        """Gathers data from fields, validates, and saves it to the SQLite database."""
+        game_date = self.date_entry.get().strip()
+        p1_name = self.p1_name_combo.get()
+        p1_score_str = self.p1_score_entry.get().strip()
+        p1_bingos_raw = self.p1_bingos_entry.get().strip()
+        p2_name = self.p2_name_combo.get()
+        p2_score_str = self.p2_score_entry.get().strip()
+        p2_bingos_raw = self.p2_bingos_entry.get().strip()
+
+        # --- Initial Validations (Date, Player Names, Scores) ---
+        try:
+            datetime.strptime(game_date, '%Y-%m-%d')
+        except ValueError:
+            messagebox.showerror("Input Error", "Invalid date format. Please use YYYY-MM-DD.", parent=self.root)
+            self.status_label.config(text="Error: Invalid date format.", foreground="red")
+            return
+
+        if not p1_name:
+            messagebox.showerror("Input Error", "Player 1 Name cannot be empty.", parent=self.root)
+            self.status_label.config(text="Error: Player 1 Name missing.", foreground="red")
+            return
+
+        if not p2_name:
+            messagebox.showerror("Input Error", "Player 2 Name cannot be empty.", parent=self.root)
+            self.status_label.config(text="Error: Player 2 Name missing.", foreground="red")
+            return
+
+        if p1_name == p2_name:
+            messagebox.showwarning("Input Warning", "Player 1 and Player 2 cannot be the same.", parent=self.root)
+            self.status_label.config(text="Warning: Players are the same.", foreground="orange")
+            return
+
+        try:
+            p1_score = int(p1_score_str) if p1_score_str else 0
+            p2_score = int(p2_score_str) if p2_score_str else 0
+            if p1_score < 0 or p2_score < 0:
+                raise ValueError("Scores cannot be negative.")
+        except ValueError as e:
+            messagebox.showerror("Input Error", f"Scores must be valid non-negative numbers. Error: {e}", parent=self.root)
+            self.status_label.config(text="Error: Invalid score.", foreground="red")
+            return
+
+        # --- Bingo Parsing and Validation ---
+        # Parse words first, keep them as lists for validation
+        p1_bingo_words_parsed = [word.strip().upper() for word in p1_bingos_raw.replace(',', ' ').split() if word.strip()]
+        p2_bingo_words_parsed = [word.strip().upper() for word in p2_bingos_raw.replace(',', ' ').split() if word.strip()]
+
+        # Validate Player 1's bingos
+        for word in p1_bingo_words_parsed:
+            # Assuming COMBINED_WORD_LIST contains uppercase words
+            if word not in COMBINED_WORD_LIST:
+                proceed = self._prompt_bingo_validation_dialog(word)
+                if not proceed:  # User clicked "Back to Form"
+                    self.status_label.config(text=f"Entry cancelled. Re-check P1 bingo: {word}", foreground="orange")
+                    self.p1_bingos_entry.focus_set() # Set focus to the problematic field
+                    return  # Stop processing and return to form
+
+        # Validate Player 2's bingos
+        for word in p2_bingo_words_parsed:
+            if word not in COMBINED_WORD_LIST:
+                proceed = self._prompt_bingo_validation_dialog(word)
+                if not proceed:  # User clicked "Back to Form"
+                    self.status_label.config(text=f"Entry cancelled. Re-check P2 bingo: {word}", foreground="orange")
+                    self.p2_bingos_entry.focus_set() # Set focus to the problematic field
+                    return  # Stop processing and return to form
+
+        # If all validations passed (or user accepted invalid words), format for DB
+        # These lists now contain only validated or user-accepted words.
+        p1_bingos_str = ", ".join(sorted(p1_bingo_words_parsed))
+        p2_bingos_str = ", ".join(sorted(p2_bingo_words_parsed))
+        # --- End Bingo Parsing and Validation ---
+
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO games (game_date, player1_name, player1_score, player1_bingos,
+                                   player2_name, player2_score, player2_bingos)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (game_date, p1_name, p1_score, p1_bingos_str,
+                  p2_name, p2_score, p2_bingos_str))
+            conn.commit()
+            self.status_label.config(text="Record added successfully!", foreground="green")
+            print(f"Record Added: {game_date}, P1: {p1_name}({p1_score}), P2: {p2_name}({p2_score})")
+            self.clear_fields()
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Could not save record: {e}", parent=self.root)
+            print(f"DB insert error: {e}")
+            self.status_label.config(text=f"Error saving: {e}", foreground="red")
+        finally:
+            if conn:
+                conn.close()
+
+    def clear_fields(self):
+        """Clears all input fields for the next entry."""
+        self.date_entry.delete(0, tk.END)
+        try: self.date_entry.insert(0, date.today().strftime('%Y-%m-%d'))
+        except Exception as e: print(f"Error resetting date field: {e}"); self.date_entry.insert(0, "YYYY-MM-DD")
+        self.p1_name_combo.set(""); self.p1_score_entry.delete(0, tk.END); self.p1_bingos_entry.delete(0, tk.END)
+        self.p2_name_combo.set(""); self.p2_score_entry.delete(0, tk.END); self.p2_bingos_entry.delete(0, tk.END)
+        self.p1_name_combo.focus(); self.status_label.config(text="")
+
+    # --- Reporting Calculation Helpers ---
+    # (All calculation helpers remain unchanged)
+    def _calculate_player_and_h2h_stats(self, records):
+        """Calculates player win/loss/tie, H2H stats, game counts, high scores."""
+        player_stats = defaultdict(lambda: {'wins': 0, 'losses': 0, 'ties': 0, 'games': 0})
+        h2h_stats = defaultdict(lambda: defaultdict(lambda: {'wins': 0, 'losses': 0}))
+        all_players_set = set(); player_high_scores = defaultdict(lambda: {'score': -1, 'date': None})
+        for row in records:
+            try: rec_date, p1_name, p1_score, p2_name, p2_score = row[1], row[2], row[3], row[5], row[6]
+            except IndexError: print(f"Warning: Skipping record due to unexpected structure: {row}"); continue
+            if not p1_name or not p2_name or p1_score is None or p2_score is None: continue
+            all_players_set.add(p1_name); all_players_set.add(p2_name)
+            player_stats[p1_name]['games'] += 1
+            if p1_name != p2_name: player_stats[p2_name]['games'] += 1
+            if p1_score > player_high_scores[p1_name]['score']: player_high_scores[p1_name] = {'score': p1_score, 'date': rec_date}
+            if p2_score > player_high_scores[p2_name]['score']: player_high_scores[p2_name] = {'score': p2_score, 'date': rec_date}
+            if p1_score > p2_score:
+                player_stats[p1_name]['wins'] += 1
+                if p1_name != p2_name: player_stats[p2_name]['losses'] += 1; h2h_stats[p1_name][p2_name]['wins'] += 1; h2h_stats[p2_name][p1_name]['losses'] += 1
+            elif p2_score > p1_score:
+                player_stats[p2_name]['wins'] += 1
+                if p1_name != p2_name: player_stats[p1_name]['losses'] += 1; h2h_stats[p2_name][p1_name]['wins'] += 1; h2h_stats[p1_name][p2_name]['losses'] += 1
+            else:
+                player_stats[p1_name]['ties'] += 1
+                if p1_name != p2_name: player_stats[p2_name]['ties'] += 1
+        stats_list = []
+        for name, data in player_stats.items():
+            wins, losses = data['wins'], data['losses']; total_decided = wins + losses
+            win_pct = (wins / total_decided * 100) if total_decided > 0 else 0.0
+            stats_list.append({'name': name, **data, 'win_pct': win_pct})
+        # End of the for loop that populates stats_list
+
+        # The following block should be DE-INDENTED to be outside the loop above
+        # Sort by name (ascending, case-insensitive) - Quaternary tie-breaker
+        stats_list.sort(key=lambda item: item['name'].lower())
+        # Sort by games played (descending) - Tertiary tie-breaker
+        stats_list.sort(key=lambda item: item['games'], reverse=True)
+        # Sort by total wins (descending) - Secondary tie-breaker
+        stats_list.sort(key=lambda item: item['wins'], reverse=True)
+        # Sort by win percentage (descending) - Primary sort key
+        stats_list.sort(key=lambda item: item['win_pct'], reverse=True)
+
+        player_games = {item['name']: item['games'] for item in stats_list}
+        all_players_in_range = sorted(list(all_players_set))
+        return stats_list, h2h_stats, all_players_in_range, player_games, dict(player_high_scores)
+        
+
+    def _calculate_bingo_stats(self, records, player_games):
+        """Calculates various bingo statistics based on rank."""
+        has_7_map = bool(WORD_7_INDEX_MAP); has_8_map = bool(WORD_8_INDEX_MAP)
+        player_total_bingos=defaultdict(int); player_sum_7_ranks=defaultdict(int); player_count_7_bingos=defaultdict(int)
+        player_max_7_rank=defaultdict(int); player_sum_8_ranks=defaultdict(int); player_count_8_bingos=defaultdict(int)
+        player_max_8_rank=defaultdict(int); active_players_with_bingos=set()
+        for row in records:
+            try: p1_name, p1_bingos_str, p2_name, p2_bingos_str = row[2], row[4], row[5], row[7]
+            except IndexError: print(f"Warning: Skipping record due to unexpected structure: {row}"); continue
+            for player_name, bingos_str in [(p1_name, p1_bingos_str), (p2_name, p2_bingos_str)]:
+                if player_name and bingos_str:
+                    active_players_with_bingos.add(player_name)
+                    bingos = [b.strip().upper() for b in bingos_str.split(',') if b.strip()]
+                    for bingo in bingos:
+                        player_total_bingos[player_name] += 1; rank_7, rank_8 = None, None
+                        if has_7_map and bingo in WORD_7_INDEX_MAP: rank_7 = WORD_7_INDEX_MAP[bingo]
+                        if has_8_map and bingo in WORD_8_INDEX_MAP: rank_8 = WORD_8_INDEX_MAP[bingo]
+                        if rank_7 is not None: player_sum_7_ranks[player_name]+=rank_7; player_count_7_bingos[player_name]+=1; player_max_7_rank[player_name]=max(player_max_7_rank.get(player_name,0), rank_7)
+                        if rank_8 is not None: player_sum_8_ranks[player_name]+=rank_8; player_count_8_bingos[player_name]+=1; player_max_8_rank[player_name]=max(player_max_8_rank.get(player_name,0), rank_8)
+        active_players = sorted(list(player_games.keys()))
+        results = {'active_players': active_players, 'has_7_map': has_7_map, 'has_8_map': has_8_map, 'avg_bingos_per_game': [], 'avg_rank_7': [], 'avg_rank_8': [], 'highest_rank_7': [], 'highest_rank_8': []}
+        if not active_players: return results
+        for player in active_players:
+            games = player_games.get(player, 0); total_bingos = player_total_bingos.get(player, 0); avg = total_bingos / games if games > 0 else 0.0
+            results['avg_bingos_per_game'].append((player, avg))
+        results['avg_bingos_per_game'].sort(key=lambda item: item[1], reverse=True)
+
+        def sort_key_reverse(item): return item[1] if item[1] is not None else -1
+        if has_7_map:
+            for player in active_players:
+                count=player_count_7_bingos.get(player,0); avg_r=player_sum_7_ranks.get(player,0)/count if count>0 else None; results['avg_rank_7'].append((player, avg_r))
+                max_7=player_max_7_rank.get(player,0); results['highest_rank_7'].append((player, max_7 if max_7 > 0 else None))
+            results['avg_rank_7'].sort(key=sort_key_reverse, reverse=True); results['highest_rank_7'].sort(key=sort_key_reverse, reverse=True)
+        if has_8_map:
+            for player in active_players:
+                count=player_count_8_bingos.get(player,0); avg_r=player_sum_8_ranks.get(player,0)/count if count>0 else None; results['avg_rank_8'].append((player, avg_r))
+                max_8=player_max_8_rank.get(player,0); results['highest_rank_8'].append((player, max_8 if max_8 > 0 else None))
+            results['avg_rank_8'].sort(key=sort_key_reverse, reverse=True); results['highest_rank_8'].sort(key=sort_key_reverse, reverse=True)
+        return results
+
+    def _calculate_avg_score(self, records, player_name=None):
+        """Calculates average scores."""
+        player_scores = defaultdict(list); all_scores = []; player_game_counts = defaultdict(int)
+        for row in records:
+            try: p1n, p1s, p2n, p2s = row[2], row[3], row[5], row[6]
+            except IndexError: continue
+            if p1n and p1s is not None: player_scores[p1n].append(p1s); all_scores.append(p1s);
+            if player_name and p1n == player_name: player_game_counts[player_name] += 1
+            if p2n and p2s is not None: player_scores[p2n].append(p2s); all_scores.append(p2s);
+            if player_name and p2n == player_name: player_game_counts[player_name] += 1
+        results = {'group_avg': None, 'player_avgs': {}, 'single_player_avg': None, 'single_player_games': 0}
+        if player_name:
+            scores = player_scores.get(player_name, []);
+            if scores: results['single_player_avg'] = sum(scores) / len(scores)
+            results['single_player_games'] = player_game_counts[player_name]
+        else:
+            if all_scores: results['group_avg'] = sum(all_scores) / len(all_scores)
+            for name, scores in player_scores.items():
+                if scores: results['player_avgs'][name] = sum(scores) / len(scores)
+        return results
+
+    def _calculate_highest_score(self, records, player_high_scores_precalc, player_name=None):
+        """Determines highest scores."""
+        results = {'overall_high': {'score': -1, 'player': None, 'date': None}, 'player_highs': player_high_scores_precalc, 'single_player_high': {'score': -1, 'date': None}}
+        if player_name:
+            if player_name in player_high_scores_precalc: results['single_player_high'] = player_high_scores_precalc[player_name]
+        else:
+            overall_high_score = -1; overall_high_player = None; overall_high_date = None
+            for name, data in player_high_scores_precalc.items():
+                if data['score'] > overall_high_score: overall_high_score = data['score']; overall_high_player = name; overall_high_date = data['date']
+            if overall_high_player: results['overall_high'] = {'score': overall_high_score, 'player': overall_high_player, 'date': overall_high_date}
+        return results
+
+    def _count_bingos(self, bingo_str):
+        """Counts the number of bingos in a comma-separated string."""
+        if not bingo_str: return 0
+        return len([b for b in bingo_str.split(',') if b.strip()])
+
+    def _calculate_win_by_bingo_stats(self, records, player_focus):
+        """Calculates win/loss statistics based on bingos for a specific player."""
+        if not player_focus: print("Win % by Bingo calculation requires a specific player focus."); return {}, {}
+        absolute_stats = defaultdict(lambda: {'w': 0, 'l': 0, 'g': 0})
+        difference_stats = defaultdict(lambda: {'w': 0, 'l': 0, 'g': 0})
+        games_processed = 0
+        for row in records:
+            try: p1_name, p1_score, p1_bingos_str, p2_name, p2_score, p2_bingos_str = row[2], row[3], row[4], row[5], row[6], row[7]
+            except IndexError: print(f"Warning: Skipping record due to unexpected structure: {row}"); continue
+            if p1_score == p2_score: continue # Skip ties
+            if p1_name != player_focus and p2_name != player_focus: continue # Skip if player not involved
+            games_processed += 1
+            p1_bingo_count = self._count_bingos(p1_bingos_str); p2_bingo_count = self._count_bingos(p2_bingos_str)
+            if p1_name == player_focus: my_bingos = p1_bingo_count; opp_bingos = p2_bingo_count; i_won = p1_score > p2_score
+            else: my_bingos = p2_bingo_count; opp_bingos = p1_bingo_count; i_won = p2_score > p1_score
+            bingo_diff = my_bingos - opp_bingos
+            absolute_stats[my_bingos]['g'] += 1;
+            if i_won: absolute_stats[my_bingos]['w'] += 1
+            else: absolute_stats[my_bingos]['l'] += 1
+            difference_stats[bingo_diff]['g'] += 1;
+            if i_won: difference_stats[bingo_diff]['w'] += 1
+            else: difference_stats[bingo_diff]['l'] += 1
+        #print(f"DEBUG (_calculate_win_by_bingo_stats): Processed {games_processed} non-tie games for {player_focus}.")
+        return dict(absolute_stats), dict(difference_stats)
+
+    def _calculate_all_player_bingos_by_index(self, records, player_focus):
+        """
+        Collects all 7-letter and 8-letter bingos for a specific player,
+        associates them with their index from word lists, and sorts them by index.
+        Returns two lists: (sorted_7_letter_bingos, sorted_8_letter_bingos)
+        Each item in the lists is a dictionary: {'index': int, 'word': str}
+        """
+        if not player_focus:
+            return [], []
+
+        player_7_bingos_indexed = []
+        player_8_bingos_indexed = []
+
+        has_7_map = bool(WORD_7_INDEX_MAP)
+        has_8_map = bool(WORD_8_INDEX_MAP)
+
+        for row in records:
+            try:
+                p1_name, p1_bingos_str = row[2], row[4]
+                p2_name, p2_bingos_str = row[5], row[7]
+            except IndexError:
+                print(f"Warning (_calc_all_player_bingos): Skipping record due to unexpected structure: {row}")
+                continue
+
+            current_player_bingos_str = None
+            if p1_name == player_focus:
+                current_player_bingos_str = p1_bingos_str
+            elif p2_name == player_focus:
+                current_player_bingos_str = p2_bingos_str
+            else:
+                continue
+
+            if current_player_bingos_str:
+                bingos_from_db = [b.strip().upper() for b in current_player_bingos_str.split(',') if b.strip()]
+                for bingo_word_original in bingos_from_db:
+                    # --- More Robust Cleaning ---
+                    # Step 1: Normalize all actual whitespace (newlines, tabs, multiple spaces) to single spaces
+                    # and strip leading/trailing whitespace.
+                    temp_word = re.sub(r'\s+', ' ', bingo_word_original).strip()
+                    
+                    # Step 2: Replace any literal '\n' (backslash followed by n) and '\r' with a space.
+                    temp_word = temp_word.replace('\\n', ' ').replace('\\r', ' ')
+
+                    # Step 3: Normalize spaces again in case step 2 introduced multiple spaces,
+                    # and ensure no leading/trailing spaces from replacements.
+                    display_word = ' '.join(temp_word.split())
+                    # --- End Robust Cleaning ---
+
+                    # CRUCIAL DEBUG PRINT: Check the console output for these lines
+                    #print(f"DEBUG BINGO: Original='{repr(bingo_word_original)}', Cleaned='{repr(display_word)}'")
+
+                    if has_7_map and bingo_word_original in WORD_7_INDEX_MAP: # Use original for map lookup
+                        idx = WORD_7_INDEX_MAP[bingo_word_original]
+                        player_7_bingos_indexed.append({'index': idx, 'word': display_word}) # Use cleaned for display
+                    elif has_8_map and bingo_word_original in WORD_8_INDEX_MAP: # Use original for map lookup
+                        idx = WORD_8_INDEX_MAP[bingo_word_original]
+                        player_8_bingos_indexed.append({'index': idx, 'word': display_word}) # Use cleaned for display
+
+        sorted_7_letter_bingos = sorted(player_7_bingos_indexed, key=lambda x: x['index'])
+        sorted_8_letter_bingos = sorted(player_8_bingos_indexed, key=lambda x: x['index'])
+
+        return sorted_7_letter_bingos, sorted_8_letter_bingos
+
+
+
+    
+
+    # --- Reporting Formatting Helpers ---
+    # (All formatting helpers remain unchanged)
+    def _generate_report_header_text(self):
+        """Generates the main report header string."""
+        lines = [f"Game Records Report - Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "=" * 100]
+        return "\n".join(lines)
+
+    def _generate_all_games_list_text(self, records):
+        """Generates the formatted text for the list of all games."""
+        lines = ["\n--- All Game Records (Most Recent First) ---\n"]
+        if not records: lines.append("No game records found."); return "\n".join(lines)
+        max_p_len = max(len(r[2] or "") for r in records + [(None,None,"Player 1")])
+        max_b_len = max(len(r[4] or "") for r in records + [(None,None,None,None,"P1 Bingos")])
+        p_w = max(max_p_len, 8) + 1; b_w = max(max_b_len, 9) + 1; id_w, date_w, s_w = 4, 12, 6
+        header = f"{'ID':<{id_w}} {'Date':<{date_w}} {'Player 1':<{p_w}} {'Score':<{s_w}} {'P1 Bingos':<{b_w}} {'Player 2':<{p_w}} {'Score':<{s_w}} {'P2 Bingos':<{b_w}}"
+        separator = "-" * len(header); lines.append(header); lines.append(separator)
+        for row in records:
+            try: rec_id, rec_date, p1n, p1s, p1b, p2n, p2s, p2b = row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7]
+            except IndexError: lines.append(f"Skipped malformed record: {row}"); continue
+            lines.append(f"{rec_id:<{id_w}} {rec_date:<{date_w}} {(p1n or ''):<{p_w}} {p1s:<{s_w}} {(p1b or ''):<{b_w}} {(p2n or ''):<{p_w}} {p2s:<{s_w}} {(p2b or ''):<{b_w}}")
+        lines.append(separator); lines.append(f"Total game records listed: {len(records)}")
+        return "\n".join(lines)
+
+    def _generate_player_summary_text(self, stats_list):
+        """Generates the formatted text for the player win/loss summary."""
+        lines = ["\n--- Player Win/Loss Records ---\n"]
+        if not stats_list: lines.append("No player statistics available."); return "\n".join(lines)
+        p_w, w_w, l_w, t_w, g_w, pct_w = 20, 6, 7, 6, 7, 8
+        header = f"{'Player':<{p_w}} {'Wins':<{w_w}} {'Losses':<{l_w}} {'Ties':<{t_w}} {'Games':<{g_w}} {'Win %':<{pct_w}}"
+        separator = "-" * (p_w + w_w + l_w + t_w + g_w + pct_w + 5); lines.append(header); lines.append(separator)
+        for item in stats_list: lines.append(f"{item['name']:<{p_w}} {item['wins']:<{w_w}} {item['losses']:<{l_w}} {item['ties']:<{t_w}} {item['games']:<{g_w}} {item['win_pct']:<{pct_w}.1f}%")
+        lines.append(separator); return "\n".join(lines)
+
+    def _generate_h2h_text(self, h2h_stats, all_players_in_range):
+        """Generates the formatted text for head-to-head records."""
+        lines = ["\n--- Head-to-Head Records ---\n"]
+        if not all_players_in_range or len(all_players_in_range) < 2: lines.append("No head-to-head matchups possible."); return "\n".join(lines)
+        max_name_len = max(max(len(p) for p in all_players_in_range), 20)
+        header = f"{'Player A':<{max_name_len}} vs {'Player B':<{max_name_len}}   {'Score (A-B)'}"; separator = "-" * len(header)
+        lines.append(header); lines.append(separator); displayed_pairs = set(); score_lines_added = False
+        for p1 in all_players_in_range:
+            for p2 in all_players_in_range:
+                if p1 == p2: continue
+                pair = tuple(sorted((p1, p2)));
+                if pair in displayed_pairs: continue
+                displayed_pairs.add(pair); player_a, player_b = pair
+                wins_a = h2h_stats.get(player_a, {}).get(player_b, {}).get('wins', 0); wins_b = h2h_stats.get(player_b, {}).get(player_a, {}).get('wins', 0)
+                if wins_a > 0 or wins_b > 0: lines.append(f"{player_a:<{max_name_len}} vs {player_b:<{max_name_len}}   {wins_a:>4} - {wins_b:<4}"); score_lines_added = True
+        if not score_lines_added: lines.append("No head-to-head wins recorded between players in this range.")
+        lines.append(separator); return "\n".join(lines)
+
+    def _generate_avg_score_text(self, avg_data, player_name=None):
+        """Generates the formatted text for the Average Score report section."""
+        lines = ["\n--- Average Score ---"]
+        if player_name:
+            avg = avg_data.get('single_player_avg'); games = avg_data.get('single_player_games', 0)
+            if avg is not None: lines.append(f"\nAverage score for {player_name} ({games} games): {avg:.1f}")
+            else: lines.append(f"\nNo score data found for {player_name}.")
+        else:
+            group_avg = avg_data.get('group_avg'); player_avgs = avg_data.get('player_avgs', {})
+            if group_avg is not None: lines.append(f"\nOverall Average Score (all players): {group_avg:.1f}")
+            else: lines.append("\nNo scores found to calculate overall average.")
+            if player_avgs:
+                lines.append("\nAverage Score per Player (Sorted Descending):")
+                player_avgs_list = list(player_avgs.items()); sorted_player_avgs = sorted(player_avgs_list, key=lambda item: item[1], reverse=True)
+                if sorted_player_avgs:
+                    p_w = max(max(len(p[0]) for p in sorted_player_avgs), 10); s_w = 8
+                    header = f"  {'Player':<{p_w}} {'Avg Score':>{s_w}}"; lines.append(header); lines.append("  " + "-" * (p_w + s_w + 1))
+                    for name, avg in sorted_player_avgs: lines.append(f"  {name:<{p_w}} {avg:>{s_w}.1f}")
+                    lines.append("  " + "-" * (p_w + s_w + 1))
+                else: lines.append("\nNo per-player averages to display.")
+            else: lines.append("\nNo per-player averages could be calculated.")
+        return "\n".join(lines)
+
+    def _generate_highest_score_text(self, high_data, player_name=None):
+        """Generates the formatted text for the Highest Score report section."""
+        lines = ["\n--- Highest Score ---"]
+        if player_name:
+            high_info = high_data.get('single_player_high', {'score': -1, 'date': None}); score = high_info['score']; date_val = high_info['date']
+            if score > -1: date_str = f" on {date_val}" if date_val else ""; lines.append(f"\nHighest score for {player_name}: {score}{date_str}")
+            else: lines.append(f"\nNo score data found for {player_name}.")
+        else:
+            overall_high = high_data.get('overall_high', {'score': -1}); player_highs = high_data.get('player_highs', {})
+            if overall_high['score'] > -1: player = overall_high['player']; score = overall_high['score']; date_val = overall_high['date']; date_str = f" on {date_val}" if date_val else ""; lines.append(f"\nOverall Highest Score: {score} by {player}{date_str}")
+            else: lines.append("\nNo scores found to determine overall highest.")
+            if player_highs:
+                lines.append("\nHighest Score per Player (Sorted Descending):")
+                valid_highs = [(name, data) for name, data in player_highs.items() if data.get('score', -1) > -1]; sorted_player_highs = sorted(valid_highs, key=lambda item: item[1]['score'], reverse=True)
+                if sorted_player_highs:
+                    p_w = max(max(len(p[0]) for p in sorted_player_highs), 10); s_w = 6; d_w = 12
+                    header = f"  {'Player':<{p_w}} {'Score':>{s_w}} {'Date':<{d_w}}"; lines.append(header); lines.append("  " + "-" * (p_w + s_w + d_w + 2))
+                    for name, data in sorted_player_highs: score = data['score']; date_val = data['date'] if data['date'] else "N/A"; lines.append(f"  {name:<{p_w}} {score:>{s_w}} {date_val:<{d_w}}")
+                    lines.append("  " + "-" * (p_w + s_w + d_w + 2))
+                else: lines.append("\nNo valid per-player high scores found.")
+            else: lines.append("\nNo per-player high scores could be determined.")
+        return "\n".join(lines)
+
+    def _generate_bingo_avg_text(self, avg_bingos_list, active_players, player_focus=None):
+        """Generates text for Average Bingos Per Game, filtered by player_focus."""
+        lines = ["\n--- Average Bingos Per Game ---"]; players_to_consider = [player_focus] if player_focus else active_players
+        p_name_w = max(max(len(p) for p in players_to_consider if p), 10) if any(players_to_consider) else 20; val_w = 10
+        if player_focus:
+            player_data = next((item for item in avg_bingos_list if item[0] == player_focus), None)
+            if player_data: player, avg = player_data; lines.append(f"\n{player:<{p_name_w}}   {avg:>{val_w}.2f}")
+            else: lines.append(f"\nNo average bingo data found for {player_focus}.")
+        else:
+            lines.append(f"\n{'Player':<{p_name_w}}   {'Avg/Game':>{val_w}}"); lines.append("-" * (p_name_w + val_w + 3))
+            if avg_bingos_list:
+                for player, avg in avg_bingos_list: lines.append(f"{player:<{p_name_w}}   {avg:>{val_w}.2f}")
+            else: lines.append("No data.")
+            lines.append("-" * (p_name_w + val_w + 3))
+        return "\n".join(lines)
+
+    def _generate_bingo_avg_rank_7_text(self, avg_rank_7_list, has_map, active_players, player_focus=None):
+        """Generates text for Average 7-Letter Bingo Probability Index, filtered by player_focus."""
+        lines = ["\n--- Average 7-Letter Bingo Probability* ---"]
+        if not has_map: lines.append("\nData unavailable (requires 7-letter word list)."); return "\n".join(lines)
+        players_to_consider = [player_focus] if player_focus else active_players; p_name_w = max(max(len(p) for p in players_to_consider if p), 10) if any(players_to_consider) else 20; val_w = 10
+        if player_focus:
+            player_data = next((item for item in avg_rank_7_list if item[0] == player_focus), None)
+            if player_data: player, avg_r = player_data; lines.append(f"\n{player:<{p_name_w}}   {avg_r:>{val_w}.1f}" if avg_r is not None else f"\n{player:<{p_name_w}}   {'N/A':>{val_w}}")
+            else: lines.append(f"\nNo 7-letter bingo data found for {player_focus}.")
+        else:
+            lines.append(f"\n{'Player':<{p_name_w}}   {'Avg Index':>{val_w}}"); lines.append("-" * (p_name_w + val_w + 3))
+            if avg_rank_7_list:
+                for player, avg_r in avg_rank_7_list: lines.append(f"{player:<{p_name_w}}   {avg_r:>{val_w}.1f}" if avg_r is not None else f"{player:<{p_name_w}}   {'N/A':>{val_w}}")
+            else: lines.append("No players with recognized 7-letter bingos found.")
+            lines.append("-" * (p_name_w + val_w + 3))
+        return "\n".join(lines)
+
+    def _generate_bingo_avg_rank_8_text(self, avg_rank_8_list, has_map, active_players, player_focus=None):
+        """Generates text for Average 8-Letter Bingo Probability Index, filtered by player_focus."""
+        lines = ["\n--- Average 8-Letter Bingo Probability* ---"]
+        if not has_map: lines.append("\nData unavailable (requires 8-letter word list)."); return "\n".join(lines)
+        players_to_consider = [player_focus] if player_focus else active_players; p_name_w = max(max(len(p) for p in players_to_consider if p), 10) if any(players_to_consider) else 20; val_w = 10
+        if player_focus:
+            player_data = next((item for item in avg_rank_8_list if item[0] == player_focus), None)
+            if player_data: player, avg_r = player_data; lines.append(f"\n{player:<{p_name_w}}   {avg_r:>{val_w}.1f}" if avg_r is not None else f"\n{player:<{p_name_w}}   {'N/A':>{val_w}}")
+            else: lines.append(f"\nNo 8-letter bingo data found for {player_focus}.")
+        else:
+            lines.append(f"\n{'Player':<{p_name_w}}   {'Avg Index':>{val_w}}"); lines.append("-" * (p_name_w + val_w + 3))
+            if avg_rank_8_list:
+                for player, avg_r in avg_rank_8_list: lines.append(f"{player:<{p_name_w}}   {avg_r:>{val_w}.1f}" if avg_r is not None else f"{player:<{p_name_w}}   {'N/A':>{val_w}}")
+            else: lines.append("No players with recognized 8-letter bingos found.")
+            lines.append("-" * (p_name_w + val_w + 3))
+        return "\n".join(lines)
+
+    def _generate_bingo_highest_rank_7_text(self, highest_rank_7_list, has_map, active_players, player_focus=None):
+        """Generates text for Highest 7-Letter Probability Index Achieved, filtered by player_focus."""
+        lines = ["\n--- Highest 7-Letter Probability* ---"]
+        if not has_map: lines.append("\nData unavailable (requires 7-letter word list)."); return "\n".join(lines)
+        players_to_consider = [player_focus] if player_focus else active_players; p_name_w = max(max(len(p) for p in players_to_consider if p), 10) if any(players_to_consider) else 20; val_w = 10
+        if player_focus:
+            player_data = next((item for item in highest_rank_7_list if item[0] == player_focus), None)
+            if player_data: player, highest_r7 = player_data; lines.append(f"\n{player:<{p_name_w}}   {highest_r7:>{val_w}.0f}" if highest_r7 is not None else f"\n{player:<{p_name_w}}   {'N/A':>{val_w}}")
+            else: lines.append(f"\nNo 7-letter bingo data found for {player_focus}.")
+        else:
+            lines.append(f"\n{'Player':<{p_name_w}}   {'Max Index':>{val_w}}"); lines.append("-" * (p_name_w + val_w + 3))
+            if highest_rank_7_list:
+                for player, highest_r7 in highest_rank_7_list: lines.append(f"{player:<{p_name_w}}   {highest_r7:>{val_w}.0f}" if highest_r7 is not None else f"{player:<{p_name_w}}   {'N/A':>{val_w}}")
+            else: lines.append("No players with recognized 7-letter bingos found.")
+            lines.append("-" * (p_name_w + val_w + 3))
+        return "\n".join(lines)
+
+    def _generate_bingo_highest_rank_8_text(self, highest_rank_8_list, has_map, active_players, player_focus=None):
+        """Generates text for Highest 8-Letter Probability Index Achieved, filtered by player_focus."""
+        lines = ["\n--- Highest 8-Letter Probability* ---"]
+        if not has_map: lines.append("\nData unavailable (requires 8-letter word list)."); return "\n".join(lines)
+        players_to_consider = [player_focus] if player_focus else active_players; p_name_w = max(max(len(p) for p in players_to_consider if p), 10) if any(players_to_consider) else 20; val_w = 10
+        if player_focus:
+            player_data = next((item for item in highest_rank_8_list if item[0] == player_focus), None)
+            if player_data: player, highest_r8 = player_data; lines.append(f"\n{player:<{p_name_w}}   {highest_r8:>{val_w}.0f}" if highest_r8 is not None else f"\n{player:<{p_name_w}}   {'N/A':>{val_w}}")
+            else: lines.append(f"\nNo 8-letter bingo data found for {player_focus}.")
+        else:
+            lines.append(f"\n{'Player':<{p_name_w}}   {'Max Index':>{val_w}}"); lines.append("-" * (p_name_w + val_w + 3))
+            if highest_rank_8_list:
+                for player, highest_r8 in highest_rank_8_list: lines.append(f"{player:<{p_name_w}}   {highest_r8:>{val_w}.0f}" if highest_r8 is not None else f"{player:<{p_name_w}}   {'N/A':>{val_w}}")
+            else: lines.append("No players with recognized 8-letter bingos found.")
+            lines.append("-" * (p_name_w + val_w + 3))
+        return "\n".join(lines)
+
+    def _generate_win_by_absolute_bingos_text(self, absolute_stats, player_focus):
+        """Formats the Win % By Absolute Bingos report section."""
+        lines = []; title = "Win % By Absolute Bingos";
+        if player_focus: title += f" for {player_focus}"
+        lines.append(f"\n--- {title} ---")
+        if not absolute_stats: lines.append("\nNo data available for this player or report type."); return "\n".join(lines)
+        sorted_counts = sorted(absolute_stats.keys()); count_w = 10; pct_w = 8; wl_w = 12
+        header = f"{'Condition':<{count_w}} {'Win %':>{pct_w}} {'Record':>{wl_w}}"; lines.append(f"\n{header}"); lines.append("-" * (count_w + pct_w + wl_w + 2))
+        for count in sorted_counts:
+            stats = absolute_stats[count]; wins = stats['w']; losses = stats['l']; total_decided = wins + losses
+            win_pct = (wins / total_decided * 100) if total_decided > 0 else 0.0
+            label = f"{count} Bingo{'s' if count != 1 else ''}"; record_str = f"(W-L: {wins}-{losses})"
+            lines.append(f"{label:<{count_w}} {win_pct:>{pct_w}.1f}% {record_str:>{wl_w}}")
+        lines.append("-" * (count_w + pct_w + wl_w + 2)); return "\n".join(lines)
+
+    def _generate_win_by_bingo_difference_text(self, difference_stats, player_focus):
+        """Formats the Win % By Bingo Difference report section."""
+        lines = []; title = "Win % By Bingo Difference vs Opponent";
+        if player_focus: title += f" for {player_focus}"
+        lines.append(f"\n--- {title} ---")
+        if not difference_stats: lines.append("\nNo data available for this player or report type."); return "\n".join(lines)
+        sorted_diffs = sorted(difference_stats.keys()); diff_w = 15; pct_w = 8; wl_w = 12
+        header = f"{'Bingo Diff':<{diff_w}} {'Win %':>{pct_w}} {'Record':>{wl_w}}"; lines.append(f"\n{header}"); lines.append("-" * (diff_w + pct_w + wl_w + 2))
+        for diff in sorted_diffs:
+            stats = difference_stats[diff]; wins = stats['w']; losses = stats['l']; total_decided = wins + losses
+            win_pct = (wins / total_decided * 100) if total_decided > 0 else 0.0
+            if diff > 0: label = f"+{diff} Bingo{'s' if diff != 1 else ''}"
+            elif diff < 0: label = f"{diff} Bingos"
+            else: label = "Same Bingos"
+            record_str = f"(W-L: {wins}-{losses})"
+            lines.append(f"{label:<{diff_w}} {win_pct:>{pct_w}.1f}% {record_str:>{wl_w}}")
+        lines.append("-" * (diff_w + pct_w + wl_w + 2)); return "\n".join(lines)
+
+    def _generate_bingo_footer_text(self):
+        """Generates the footer notes for the bingo statistics section."""
+        lines = ["\n" + "*" * 80, "*Note on Bingo Probability (Index):", " - Index is the 1-based position of the bingo word in the loaded word list.", "   A higher index corresponds to a word appearing later in the list,", "   often implying lower frequency or probability (depending on list source).", f" - Word lists loaded: {len(WORD_LIST_7)} (7-letter), {len(WORD_LIST_8)} (8-letter) words.", " - 'Average Probability (Index)' is the average index of all recognized 7/8-letter bingos played.", " - 'Highest Probability (Index) Achieved' is the maximum index (least probable based on list position)", "   among all recognized 7/8-letter bingos played by that player for that length.", " - Bingo sections are sorted from Highest Index/Value (Least Probable/Best) to Lowest.", " - Requires the corresponding 7/8 letter word lists ('7-letter-list.txt', '8-letter-list.txt')", "   to be present in the same directory as the script and loaded correctly.", "*" * 80]
+        return "\n".join(lines)
+
+
+    def _generate_all_player_bingos_by_index_text(self, bingos_7_letter, bingos_8_letter, player_focus):
+        """
+        Formats the list of all player bingos (7 and 8 letters) sorted by index
+        into a two-column layout.
+        Assumes bingos_X_letter lists are populated only if corresponding WORD_X_INDEX_MAP was available.
+        """
+        lines = [] # Start with an empty list
+
+        # Add a blank line before this section for better separation in the overall report
+        lines.append("") 
+        lines.append(f"--- All Bingos For {player_focus}, By Probability* ---")
+
+        if not bingos_7_letter and not bingos_8_letter:
+            lines.append("") # Add a blank line for spacing
+            lines.append(f"No recognized 7-letter or 8-letter bingos found for {player_focus} in the selected period,")
+            lines.append("or the required 7-letter/8-letter word lists are not loaded/available.")
+            return "\n".join(lines)
+
+        all_indices = [b['index'] for b in bingos_7_letter] + [b['index'] for b in bingos_8_letter]
+        idx_width = len(str(max(all_indices))) if all_indices else 1
+
+        col1_formatted_entries = []
+        if WORD_7_INDEX_MAP:
+            for b in bingos_7_letter:
+                # Ensure the word itself is clean one last time, though it should be from the previous step
+                clean_word = ' '.join(str(b['word']).replace('\\n', ' ').replace('\r', ' ').split())
+                col1_formatted_entries.append(f"{b['index']:<{idx_width}} {clean_word}")
+        
+        col2_formatted_entries = []
+        if WORD_8_INDEX_MAP:
+            for b in bingos_8_letter:
+                clean_word = ' '.join(str(b['word']).replace('\\n', ' ').replace('\r', ' ').split())
+                col2_formatted_entries.append(f"{b['index']:<{idx_width}} {clean_word}")
+
+        max_len_col1 = 0
+        if col1_formatted_entries:
+            max_len_col1 = max(len(s) for s in col1_formatted_entries)
+        
+        header1_text = "--- 7-Letter Bingos ---"
+        header2_text = "--- 8-Letter Bingos ---"
+        
+        max_len_col1 = max(max_len_col1, len(header1_text))
+        if not WORD_7_INDEX_MAP:
+             max_len_col1 = max(max_len_col1, len("(7-letter list not loaded)"))
+
+        spacer = " " * 8
+        
+        actual_header1 = header1_text if WORD_7_INDEX_MAP else "(7-letter list not loaded)"
+        actual_header2 = header2_text if WORD_8_INDEX_MAP else "(8-letter list not loaded)"
+
+        lines.append("") # Add a blank line for spacing before headers
+        lines.append(f"{actual_header1:<{max_len_col1}}{spacer}{actual_header2}")
+        lines.append(f"{'-' * len(actual_header1):<{max_len_col1}}{spacer}{'-' * len(actual_header2)}")
+
+        num_rows = 0
+        if WORD_7_INDEX_MAP and col1_formatted_entries:
+            num_rows = max(num_rows, len(col1_formatted_entries))
+        if WORD_8_INDEX_MAP and col2_formatted_entries:
+            num_rows = max(num_rows, len(col2_formatted_entries))
+        
+        for i in range(num_rows):
+            entry1 = ""
+            if WORD_7_INDEX_MAP and i < len(col1_formatted_entries):
+                entry1 = col1_formatted_entries[i]
+            
+            entry2 = ""
+            if WORD_8_INDEX_MAP and i < len(col2_formatted_entries):
+                entry2 = col2_formatted_entries[i]
+            
+            lines.append(f"{entry1:<{max_len_col1}}{spacer}{entry2}")
+            
+        return "\n".join(lines)
+
+
+    # --- UI Helpers ---
+    # (All UI helpers remain unchanged)
+    def _open_calendar_for_entry(self, target_entry, parent_window):
+        """Opens a separate Toplevel window with a Calendar widget."""
+        if not TKCALENDAR_AVAILABLE: messagebox.showerror("Error", "tkcalendar library is not available.", parent=parent_window); return
+        if parent_window and parent_window.winfo_exists():
+            try: parent_window.grab_release()
+            except tk.TclError: pass
+        else: parent_window = self.root
+        cal_dialog = tk.Toplevel(parent_window); cal_dialog.title("Select Date"); cal_dialog.transient(parent_window)
+        try:
+            current_date_str = target_entry.get()
+            try: current_date = datetime.strptime(current_date_str, '%Y-%m-%d').date()
+            except ValueError: current_date = date.today()
+            cal = tkcalendar.Calendar(cal_dialog, selectmode='day', year=current_date.year, month=current_date.month, day=current_date.day, date_pattern='y-mm-dd', background='lightgrey', foreground='black', selectforeground='black', normalforeground='black', weekendforeground='black', headerforeground='black', headersforeground='black', selectbackground='#a0d0a0')
+            cal.pack(pady=10, padx=10)
+            def set_date_and_close(): selected_date = cal.get_date(); target_entry.delete(0, tk.END); target_entry.insert(0, selected_date); cal_dialog.destroy()
+            ttk.Button(cal_dialog, text="Select", command=set_date_and_close).pack(pady=(0, 10))
+            cal_dialog.update_idletasks()
+            if parent_window and parent_window.winfo_exists():
+                px, py, pw, ph = parent_window.winfo_rootx(), parent_window.winfo_rooty(), parent_window.winfo_width(), parent_window.winfo_height()
+                cw, ch = cal_dialog.winfo_width(), cal_dialog.winfo_height(); x = px + (pw // 2) - (cw // 2); y = py + (ph // 2) - (ch // 2)
+                cal_dialog.geometry(f"+{x}+{y}")
+            else: cal_dialog.geometry(f"+{self.root.winfo_screenwidth()//2 - cal_dialog.winfo_width()//2}+{self.root.winfo_screenheight()//2 - cal_dialog.winfo_height()//2}")
+            cal_dialog.wait_window()
+        finally:
+            if parent_window and parent_window.winfo_exists():
+                 try: parent_window.grab_set()
+                 except tk.TclError: pass
+
+    def _update_date_entry(self, entry_widget, date_obj):
+        """Helper to clear and insert a date into a ttk.Entry."""
+        entry_widget.delete(0, tk.END);
+        if date_obj: entry_widget.insert(0, date_obj.strftime('%Y-%m-%d'))
+
+    def _set_date_range_week(self, start_entry, end_entry):
+        """Sets the date entries to the current week (Mon-Sun)."""
+        today = date.today(); start_of_week = today - timedelta(days=today.weekday()); end_of_week = start_of_week + timedelta(days=6)
+        self._update_date_entry(start_entry, start_of_week); self._update_date_entry(end_entry, end_of_week); print(f"Date range set to current week: {start_of_week} to {end_of_week}")
+
+    def _set_date_range_month(self, start_entry, end_entry):
+        """Sets the date entries to the current month (1st to last day)."""
+        today = date.today(); start_of_month = today.replace(day=1); next_month_year = start_of_month.year + (start_of_month.month // 12); next_month_month = (start_of_month.month % 12) + 1
+        first_day_next_month = date(next_month_year, next_month_month, 1); end_of_month = first_day_next_month - timedelta(days=1)
+        self._update_date_entry(start_entry, start_of_month); self._update_date_entry(end_entry, end_of_month); print(f"Date range set to current month: {start_of_month} to {end_of_month}")
+
+    def _set_date_range_year(self, start_entry, end_entry):
+        """Sets the date entries to the current year (Jan 1 - Dec 31)."""
+        today = date.today(); start_of_year = today.replace(month=1, day=1); end_of_year = today.replace(month=12, day=31)
+        self._update_date_entry(start_entry, start_of_year); self._update_date_entry(end_entry, end_of_year); print(f"Date range set to current year: {start_of_year} to {end_of_year}")
+
+    def _set_date_range_all(self, start_entry, end_entry):
+        """Clears the date entries for 'All Time'."""
+        self._update_date_entry(start_entry, None); self._update_date_entry(end_entry, None); print("Date range set to 'All Time' (cleared).")
+
+
+    # --- Admin Tools Helpers ---
+    # (All admin helpers remain unchanged)
+    def _backup_database(self):
+        """Creates a timestamped backup copy of the database file."""
+        source_db_path = DB_NAME; parent = self.admin_main_dialog if hasattr(self, 'admin_main_dialog') and self.admin_main_dialog.winfo_exists() else self.root
+        if not os.path.exists(source_db_path): messagebox.showerror("Backup Error", f"Source database file not found:\n{source_db_path}", parent=parent); print(f"Error: Backup source file '{source_db_path}' does not exist."); return
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S"); default_filename = f"{os.path.splitext(DB_NAME)[0]}_backup_{timestamp}.db"
+        backup_path = filedialog.asksaveasfilename(parent=parent, title="Save Database Backup As", initialfile=default_filename, defaultextension=".db", filetypes=[("Database files", "*.db"), ("All files", "*.*")])
+        if not backup_path: print("Database backup cancelled by user."); self.status_label.config(text="Backup cancelled.", foreground="orange"); return
+        try:
+            self.status_label.config(text="Backing up database...", foreground="blue"); print(f"Attempting to backup '{source_db_path}' to '{backup_path}'...")
+            shutil.copy2(source_db_path, backup_path); self.status_label.config(text="Database backup successful!", foreground="green"); print("Database backup successful.")
+            messagebox.showinfo("Backup Successful", f"Database successfully backed up to:\n{backup_path}", parent=parent)
+        except IOError as e: self.status_label.config(text=f"Backup failed: I/O Error {e.errno}", foreground="red"); print(f"Error backing up database (IOError): {e}"); messagebox.showerror("Backup Failed", f"Could not copy database file:\n{e}", parent=parent)
+        except Exception as e: self.status_label.config(text=f"Backup failed: Unexpected error", foreground="red"); print(f"Error backing up database (Exception): {e}"); messagebox.showerror("Backup Failed", f"An unexpected error occurred during backup:\n{e}", parent=parent)
+
+    def _populate_player_filter_combobox(self, combo_widget, include_group_option=True):
+        """Populates the combobox with players, optionally including a group option."""
+        group_analysis_text = "(Group Analysis)"; display_list = [group_analysis_text] if include_group_option else []
+        display_list.extend(APP_PLAYER_LIST); combo_widget['values'] = display_list
+        if display_list: combo_widget.current(0)
+
+
+    # --- Search/View Window Methods ---
+    # (All search/view/edit/delete methods remain unchanged)
+    def _setup_treeview(self, parent_frame):
+        """Creates and configures the Treeview widget for displaying game records."""
+        tree_frame = ttk.Frame(parent_frame); tree_frame.pack(expand=True, fill=tk.BOTH, pady=(5,0))
+        columns = ('id', 'date', 'p1_name', 'p1_score', 'p1_bingos', 'p2_name', 'p2_score', 'p2_bingos')
+        tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=15)
+        tree.heading('id', text='ID'); tree.column('id', width=40, stretch=tk.NO, anchor=tk.CENTER)
+        tree.heading('date', text='Date'); tree.column('date', width=90, stretch=tk.NO)
+        tree.heading('p1_name', text='Player 1'); tree.column('p1_name', width=120)
+        tree.heading('p1_score', text='P1 Score'); tree.column('p1_score', width=60, stretch=tk.NO, anchor=tk.E)
+        tree.heading('p1_bingos', text='P1 Bingos'); tree.column('p1_bingos', width=150)
+        tree.heading('p2_name', text='Player 2'); tree.column('p2_name', width=120)
+        tree.heading('p2_score', text='P2 Score'); tree.column('p2_score', width=60, stretch=tk.NO, anchor=tk.E)
+        tree.heading('p2_bingos', text='P2 Bingos'); tree.column('p2_bingos', width=150)
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview); hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set); tree.grid(row=0, column=0, sticky='nsew'); vsb.grid(row=0, column=1, sticky='ns'); hsb.grid(row=1, column=0, sticky='ew')
+        tree_frame.grid_rowconfigure(0, weight=1); tree_frame.grid_columnconfigure(0, weight=1); return tree
+
+    def _clear_search_filters(self, player_combo, start_entry, end_entry, tree):
+        """Resets filter widgets and clears the results tree."""
+        player_combo.current(0); start_entry.delete(0, tk.END); end_entry.delete(0, tk.END)
+        try: end_entry.insert(0, date.today().strftime('%Y-%m-%d'))
+        except Exception as e: print(f"Error resetting end date: {e}"); end_entry.insert(0, "YYYY-MM-DD")
+        for item in tree.get_children(): tree.delete(item); print("Search filters cleared.")
+
+    def _execute_search(self, player_combo, start_entry, end_entry, tree):
+        """Fetches data based on filters and populates the Treeview."""
+        player_filter_raw = player_combo.get(); start_date_str = start_entry.get().strip(); end_date_str = end_entry.get().strip()
+        group_analysis_text = "(Group Analysis)"; player_name_to_fetch = None
+        if player_filter_raw and player_filter_raw != group_analysis_text: player_name_to_fetch = player_filter_raw
+        self.last_search_player = player_name_to_fetch; self.last_search_start = start_date_str; self.last_search_end = end_date_str
+        start_date_validated = None; end_date_validated = None; parent_win = player_combo.winfo_toplevel()
+        if start_date_str:
+            try: datetime.strptime(start_date_str, '%Y-%m-%d'); start_date_validated = start_date_str
+            except ValueError: messagebox.showerror("Input Error", "Invalid Start Date format. Use YYYY-MM-DD.", parent=parent_win); return
+        if end_date_str:
+            try: datetime.strptime(end_date_str, '%Y-%m-%d'); end_date_validated = end_date_str
+            except ValueError: messagebox.showerror("Input Error", "Invalid End Date format. Use YYYY-MM-DD.", parent=parent_win); return
+        if start_date_validated and end_date_validated and start_date_validated > end_date_validated: messagebox.showerror("Input Error", "Start Date cannot be after End Date.", parent=parent_win); return
+        print(f"Executing search: Player='{player_name_to_fetch or 'Any'}'', Start='{start_date_validated or 'N/A'}', End='{end_date_validated or 'N/A'}'")
+        self.status_label.config(text="Searching records...", foreground="blue")
+        records = self._fetch_game_data(columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos", order_by="game_date DESC, id DESC", start_date=start_date_validated, end_date=end_date_validated, player_name=player_name_to_fetch)
+        for item in tree.get_children(): tree.delete(item)
+        if records:
+            for record in records:
+                if len(record) == 8: tree.insert('', tk.END, values=record)
+                else: print(f"Warning: Skipping record with unexpected column count: {record}")
+            self.status_label.config(text=f"Found {len(records)} record(s).", foreground="blue"); print(f"Search complete. Found {len(records)} record(s).")
+        elif records is not None: self.status_label.config(text="No records found matching criteria.", foreground="blue"); print("Search complete. No matching records found.")
+        else: self.status_label.config(text="Search failed.", foreground="red")
+
+    def open_search_view_window(self):
+        """Opens the Search/View Games window."""
+        self.last_search_player = None; self.last_search_start = None; self.last_search_end = None; self.selected_record_id = None; self.search_tree = None; self.edit_button = None; self.delete_button = None
+        if hasattr(self, 'admin_main_dialog') and self.admin_main_dialog.winfo_exists(): self.admin_main_dialog.destroy()
+        search_window = tk.Toplevel(self.root); search_window.title("Search / View Game Records"); search_window.geometry("950x650"); search_window.transient(self.root); search_window.grab_set()
+        main_frame = ttk.Frame(search_window, padding="10"); main_frame.pack(expand=True, fill=tk.BOTH)
+        filter_frame = ttk.LabelFrame(main_frame, text="Filters", padding="10"); filter_frame.pack(fill=tk.X, pady=(0, 10)); filter_frame.columnconfigure(1, weight=1)
+        ttk.Label(filter_frame, text="Player:").grid(row=0, column=0, padx=(0,5), pady=5, sticky=tk.W)
+        player_combo = ttk.Combobox(filter_frame, width=25, state='readonly'); player_combo.grid(row=0, column=1, columnspan=7, padx=5, pady=5, sticky=(tk.W, tk.E)); self._populate_player_filter_combobox(player_combo, include_group_option=True)
+        ttk.Label(filter_frame, text="Start:").grid(row=1, column=0, padx=(0,5), pady=5, sticky=tk.W); start_date_entry = ttk.Entry(filter_frame, width=10); start_date_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        if TKCALENDAR_AVAILABLE: ttk.Button(filter_frame, text="...", width=3, command=lambda entry=start_date_entry, parent=search_window: self._open_calendar_for_entry(entry, parent)).grid(row=1, column=2, padx=(0,5), pady=5, sticky=tk.W)
+        ttk.Label(filter_frame, text="End:").grid(row=1, column=3, padx=(10,5), pady=5, sticky=tk.W); end_date_entry = ttk.Entry(filter_frame, width=10); end_date_entry.grid(row=1, column=4, padx=5, pady=5, sticky=tk.W)
+        if TKCALENDAR_AVAILABLE: ttk.Button(filter_frame, text="...", width=3, command=lambda entry=end_date_entry, parent=search_window: self._open_calendar_for_entry(entry, parent)).grid(row=1, column=5, padx=(0,5), pady=5, sticky=tk.W)
+        quick_button_frame = ttk.Frame(filter_frame); quick_button_frame.grid(row=2, column=0, columnspan=6, pady=(5, 2), sticky=tk.EW)
+        for i in range(4): quick_button_frame.columnconfigure(i, weight=1)
+        ttk.Button(quick_button_frame, text="This Week", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_week(s, e)).grid(row=0, column=0, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="This Month", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_month(s, e)).grid(row=0, column=1, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="This Year", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_year(s, e)).grid(row=0, column=2, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="All Time", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_all(s, e)).grid(row=0, column=3, padx=2, sticky=tk.EW)
+        search_button = ttk.Button(filter_frame, text="Search", command=lambda p=player_combo, s=start_date_entry, e=end_date_entry: self._execute_search(p, s, e, self.search_tree)); search_button.grid(row=0, column=8, rowspan=3, padx=(10,5), pady=5, sticky="nsew")
+        clear_button = ttk.Button(filter_frame, text="Clear", command=lambda p=player_combo, s=start_date_entry, e=end_date_entry: self._clear_search_filters(p, s, e, self.search_tree)); clear_button.grid(row=0, column=9, rowspan=3, padx=5, pady=5, sticky="nsew")
+        results_frame = ttk.Frame(main_frame); results_frame.pack(expand=True, fill=tk.BOTH); self.search_tree = self._setup_treeview(results_frame)
+        action_button_frame = ttk.Frame(main_frame); action_button_frame.pack(fill=tk.X, pady=(5,0))
+        self.edit_button = ttk.Button(action_button_frame, text="Edit Selected", state=tk.DISABLED, command=self.open_edit_window); self.edit_button.pack(side=tk.LEFT, padx=5)
+        self.delete_button = ttk.Button(action_button_frame, text="Delete Selected", state=tk.DISABLED, command=self._delete_selected_record); self.delete_button.pack(side=tk.LEFT, padx=5)
+        self.search_tree.bind('<<TreeviewSelect>>', self._on_treeview_select); ttk.Button(main_frame, text="Close", command=search_window.destroy).pack(pady=(10,0), side=tk.RIGHT)
+        self._execute_search(player_combo, start_date_entry, end_date_entry, self.search_tree)
+
+    def _on_treeview_select(self, event):
+        """Handles selection changes in the search results Treeview."""
+        selected_items = self.search_tree.selection()
+        if len(selected_items) == 1:
+            item_data = self.search_tree.item(selected_items[0])
+            try: self.selected_record_id = item_data['values'][0]; state = tk.NORMAL
+            except (IndexError, TypeError): self.selected_record_id = None; state = tk.DISABLED; print("Error retrieving data for selected item.")
+        else: self.selected_record_id = None; state = tk.DISABLED
+        if self.edit_button: self.edit_button.config(state=state)
+        if self.delete_button: self.delete_button.config(state=state)
+
+    def _fetch_record_by_id(self, record_id):
+        """Fetches a single game record by its primary key (ID)."""
+        conn = None
+        try: conn = sqlite3.connect(DB_NAME); cursor = conn.cursor(); cursor.execute("SELECT * FROM games WHERE id = ?", (record_id,)); return cursor.fetchone()
+        except sqlite3.Error as e: messagebox.showerror("Database Error", f"Could not fetch record ID {record_id}: {e}", parent=self.root); print(f"Database error fetching record ID {record_id}: {e}"); return None
+        finally:
+            if conn: conn.close()
+
+    def _delete_selected_record(self):
+        """Deletes the currently selected record after confirmation."""
+        if self.selected_record_id is None: messagebox.showwarning("No Selection", "Please select a record in the table to delete."); return
+        parent_window = self.search_tree.winfo_toplevel() if hasattr(self, 'search_tree') and self.search_tree else self.root
+        confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to permanently delete record ID {self.selected_record_id}?\n\nThis action cannot be undone.", parent=parent_window)
+        if not confirm: print(f"Deletion cancelled for record ID {self.selected_record_id}."); return
+        print(f"Attempting to delete record ID {self.selected_record_id}..."); conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME); cursor = conn.cursor(); cursor.execute("DELETE FROM games WHERE id = ?", (self.selected_record_id,)); conn.commit()
+            if cursor.rowcount > 0: print(f"Record ID {self.selected_record_id} deleted successfully."); messagebox.showinfo("Success", "Record deleted successfully.", parent=parent_window); self.selected_record_id = None; self._refresh_search_results()
+            else: print(f"Record ID {self.selected_record_id} not found for deletion."); messagebox.showwarning("Not Found", f"Record ID {self.selected_record_id} could not be found.", parent=parent_window); self._refresh_search_results()
+        except sqlite3.Error as e: messagebox.showerror("Database Error", f"Could not delete record: {e}", parent=parent_window); print(f"DB delete error for ID {self.selected_record_id}: {e}")
+        finally:
+            if conn: conn.close()
+
+    def _refresh_search_results(self):
+        """Refreshes the Treeview using the last used search parameters."""
+        print("Refreshing search results...")
+        if not hasattr(self, 'search_tree') or not self.search_tree or not self.search_tree.winfo_exists(): print("Search treeview not available for refresh."); return
+        start_date_validated = None; end_date_validated = None
+        if self.last_search_start:
+            try: datetime.strptime(self.last_search_start, '%Y-%m-%d'); start_date_validated = self.last_search_start
+            except ValueError: pass
+        if self.last_search_end:
+            try: datetime.strptime(self.last_search_end, '%Y-%m-%d'); end_date_validated = self.last_search_end
+            except ValueError: pass
+        records = self._fetch_game_data(columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos", order_by="game_date DESC, id DESC", start_date=start_date_validated, end_date=end_date_validated, player_name=self.last_search_player)
+        for item in self.search_tree.get_children(): self.search_tree.delete(item)
+        if records:
+            for record in records:
+                if len(record) == 8: self.search_tree.insert('', tk.END, values=record)
+                else: print(f"Warning: Skipping record with unexpected column count: {record}")
+            print(f"Refresh complete. Displaying {len(records)} record(s)."); self.status_label.config(text=f"Refreshed. Found {len(records)} record(s).", foreground="blue")
+        elif records is not None: print("Refresh complete. No matching records found."); self.status_label.config(text="Refreshed. No records found.", foreground="blue")
+        else: print("Refresh failed."); self.status_label.config(text="Refresh failed.", foreground="red")
+        self.selected_record_id = None;
+        if self.edit_button: self.edit_button.config(state=tk.DISABLED)
+        if self.delete_button: self.delete_button.config(state=tk.DISABLED)
+
+    def open_edit_window(self):
+        """Opens a dialog to edit the currently selected game record."""
+        if self.selected_record_id is None: messagebox.showwarning("No Selection", "Please select a record in the table to edit."); return
+        record_data = self._fetch_record_by_id(self.selected_record_id)
+        if not record_data: messagebox.showerror("Error", f"Could not load record ID {self.selected_record_id}."); self._refresh_search_results(); return
+        try: rec_id, game_date, p1_name, p1_score, p1_bingos, p2_name, p2_score, p2_bingos = record_data
+        except (ValueError, TypeError): messagebox.showerror("Error", "Failed to unpack record data."); return
+        parent_window = self.search_tree.winfo_toplevel() if hasattr(self, 'search_tree') and self.search_tree else self.root
+        edit_window = tk.Toplevel(parent_window); edit_window.title(f"Edit Game Record (ID: {rec_id})"); edit_window.transient(parent_window); edit_window.grab_set()
+        edit_frame = ttk.Frame(edit_window, padding="15"); edit_frame.grid(row=0, column=0, sticky="nsew"); edit_frame.columnconfigure(1, weight=1)
+        row_num = 0; ttk.Label(edit_frame, text="Date (YYYY-MM-DD):").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=3)
+        date_var = tk.StringVar(value=game_date); ttk.Entry(edit_frame, textvariable=date_var, width=40).grid(row=row_num, column=1, sticky="ew", padx=5, pady=3); row_num += 1
+        player_display_list = APP_PLAYER_LIST; ttk.Label(edit_frame, text="Player 1 Name:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=3)
+        p1_name_var = tk.StringVar(value=p1_name); p1_combo = ttk.Combobox(edit_frame, textvariable=p1_name_var, values=player_display_list, state='readonly', width=38)
+        if p1_name in player_display_list: p1_combo.current(player_display_list.index(p1_name))
+        p1_combo.grid(row=row_num, column=1, sticky="ew", padx=5, pady=3); row_num += 1
+        ttk.Label(edit_frame, text="Player 1 Score:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=3); p1_score_var = tk.StringVar(value=str(p1_score)); ttk.Entry(edit_frame, textvariable=p1_score_var, width=15).grid(row=row_num, column=1, sticky=tk.W, padx=5, pady=3); row_num += 1
+        ttk.Label(edit_frame, text="Player 1 Bingos:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=3); p1_bingos_var = tk.StringVar(value=p1_bingos); ttk.Entry(edit_frame, textvariable=p1_bingos_var, width=40).grid(row=row_num, column=1, sticky="ew", padx=5, pady=3); row_num += 1
+        ttk.Separator(edit_frame, orient=tk.HORIZONTAL).grid(row=row_num, column=0, columnspan=2, sticky="ew", pady=8); row_num += 1
+        ttk.Label(edit_frame, text="Player 2 Name:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=3); p2_name_var = tk.StringVar(value=p2_name); p2_combo = ttk.Combobox(edit_frame, textvariable=p2_name_var, values=player_display_list, state='readonly', width=38)
+        if p2_name in player_display_list: p2_combo.current(player_display_list.index(p2_name))
+        p2_combo.grid(row=row_num, column=1, sticky="ew", padx=5, pady=3); row_num += 1
+        ttk.Label(edit_frame, text="Player 2 Score:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=3); p2_score_var = tk.StringVar(value=str(p2_score)); ttk.Entry(edit_frame, textvariable=p2_score_var, width=15).grid(row=row_num, column=1, sticky=tk.W, padx=5, pady=3); row_num += 1
+        ttk.Label(edit_frame, text="Player 2 Bingos:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=3); p2_bingos_var = tk.StringVar(value=p2_bingos); ttk.Entry(edit_frame, textvariable=p2_bingos_var, width=40).grid(row=row_num, column=1, sticky="ew", padx=5, pady=3); row_num += 1
+        button_frame = ttk.Frame(edit_frame); button_frame.grid(row=row_num, column=0, columnspan=2, pady=(15, 5)); button_frame.columnconfigure(0, weight=1); button_frame.columnconfigure(1, weight=1)
+        save_button = ttk.Button(button_frame, text="Save Changes", command=lambda: self._save_edited_record(edit_window, rec_id, date_var, p1_name_var, p1_score_var, p1_bingos_var, p2_name_var, p2_score_var, p2_bingos_var)); save_button.grid(row=0, column=0, padx=10, sticky=tk.E)
+        cancel_button = ttk.Button(button_frame, text="Cancel", command=edit_window.destroy); cancel_button.grid(row=0, column=1, padx=10, sticky=tk.W)
+        edit_window.wait_window()
+
+    def _save_edited_record(self, edit_window, record_id, date_var,
+                       p1_name_var, p1_score_var, p1_bingos_var,
+                       p2_name_var, p2_score_var, p2_bingos_var):
+        """Validates and saves the edited record data to the database."""
+
+        # Get data from Tkinter variables
+        game_date = date_var.get().strip()
+        p1_name = p1_name_var.get()
+        p1_score_str = p1_score_var.get().strip()
+        p1_bingos_raw = p1_bingos_var.get().strip()
+        p2_name = p2_name_var.get()
+        p2_score_str = p2_score_var.get().strip()
+        p2_bingos_raw = p2_bingos_var.get().strip()
+
+        # --- Validation ---
+        # Date validation
+        try:
+            datetime.strptime(game_date, '%Y-%m-%d')
+        except ValueError:
+            messagebox.showerror("Input Error", "Invalid date format. Please use YYYY-MM-DD.", parent=edit_window)
+            return
+
+        # Player name validation
+        if not p1_name: messagebox.showerror("Input Error", "Player 1 Name cannot be empty.", parent=edit_window); return
+        if not p2_name: messagebox.showerror("Input Error", "Player 2 Name cannot be empty.", parent=edit_window); return
+        if p1_name == p2_name: messagebox.showwarning("Input Warning", "Player 1 and Player 2 cannot be the same.", parent=edit_window); return
+
+        # Score conversion validation
+        try:
+            p1_score = int(p1_score_str) if p1_score_str else 0
+            p2_score = int(p2_score_str) if p2_score_str else 0
+        except ValueError as e:
+            # Error specifically during int() conversion
+            messagebox.showerror("Input Error", f"Scores must be valid numbers. Error: {e}", parent=edit_window)
+            return
+
+        # Score value validation (check for negative AFTER conversion)
+        if p1_score < 0 or p2_score < 0:
+            messagebox.showerror("Input Error", "Scores cannot be negative.", parent=edit_window)
+            return
+        # --- End Score Validation Restructure ---
+
+        # Process bingos (allow comma or space)
+        p1_bingos_list = sorted([word.strip().upper() for word in p1_bingos_raw.replace(',', ' ').split() if word.strip()])
+        p1_bingos_str = ", ".join(p1_bingos_list)
+        p2_bingos_list = sorted([word.strip().upper() for word in p2_bingos_raw.replace(',', ' ').split() if word.strip()])
+        p2_bingos_str = ", ".join(p2_bingos_list)
+        # --- End Validation ---
+
+        # --- Database Update ---
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE games
+                SET game_date = ?,
+                    player1_name = ?, player1_score = ?, player1_bingos = ?,
+                    player2_name = ?, player2_score = ?, player2_bingos = ?
+                WHERE id = ?
+            """, (game_date, p1_name, p1_score, p1_bingos_str,
+                  p2_name, p2_score, p2_bingos_str, record_id))
+            conn.commit()
+
+            print(f"Record ID {record_id} updated successfully.")
+            # Show info relative to the edit window's parent (search window or root)
+            messagebox.showinfo("Success", "Record updated successfully.", parent=edit_window.master)
+            edit_window.destroy() # Close edit window on success
+            self._refresh_search_results() # Refresh the list in the search window
+
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Could not update record: {e}", parent=edit_window)
+            print(f"DB update error for ID {record_id}: {e}")
+        finally:
+            if conn: conn.close()
+
+
+    # --- Player Management & UI Updates ---
+    # (All player management methods remain unchanged)
+    def _update_all_player_comboboxes(self):
+        """Updates main entry player selection Comboboxes."""
+        player_display_list = APP_PLAYER_LIST # Assumes sorted
+        if hasattr(self, 'p1_name_combo'): self.p1_name_combo['values'] = player_display_list; self.p1_name_combo.set("")
+        if hasattr(self, 'p2_name_combo'): self.p2_name_combo['values'] = player_display_list; self.p2_name_combo.set("")
+        print("Updated main player entry comboboxes.")
+
+    def _add_player(self):
+        """Prompts for a new player name, validates, adds, saves, and updates UI."""
+        global APP_PLAYER_LIST
+        parent_window = self.admin_main_dialog if hasattr(self, 'admin_main_dialog') and self.admin_main_dialog.winfo_exists() else self.root
+        new_name_raw = simpledialog.askstring("Add Player", "Enter the full name of the new player:", parent=parent_window)
+        if not new_name_raw: print("Add player cancelled."); return
+        new_name = new_name_raw.strip()
+        if not new_name: messagebox.showwarning("Invalid Name", "Player name cannot be empty.", parent=parent_window); return
+        if any(name.lower() == new_name.lower() for name in APP_PLAYER_LIST): messagebox.showwarning("Duplicate Name", f"Player '{new_name}' already exists.", parent=parent_window); return
+        APP_PLAYER_LIST.append(new_name); save_player_names(); self._update_all_player_comboboxes()
+        self.status_label.config(text=f"Player '{new_name}' added.", foreground="blue"); messagebox.showinfo("Player Added", f"Player '{new_name}' added successfully.", parent=parent_window); print(f"Player '{new_name}' added.")
+
+    def open_view_players_window(self):
+        """Opens a window to display the current list of players."""
+        parent_window = self.admin_main_dialog if hasattr(self, 'admin_main_dialog') and self.admin_main_dialog.winfo_exists() else self.root
+        view_window = tk.Toplevel(parent_window); view_window.title("Current Player List"); view_window.geometry("300x400"); view_window.transient(parent_window)
+        main_frame = ttk.Frame(view_window, padding="10"); main_frame.pack(expand=True, fill=tk.BOTH)
+        list_frame = ttk.Frame(main_frame); list_frame.pack(expand=True, fill=tk.BOTH, pady=(0, 10))
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL); scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        player_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, height=15); player_listbox.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+        scrollbar.config(command=player_listbox.yview)
+        if APP_PLAYER_LIST:
+            for player_name in APP_PLAYER_LIST: player_listbox.insert(tk.END, player_name)
+        else: player_listbox.insert(tk.END, "(No players loaded or added)")
+        ttk.Button(main_frame, text="Close", command=view_window.destroy).pack()
+        view_window.update_idletasks(); px, py, pw, ph = parent_window.winfo_rootx(), parent_window.winfo_rooty(), parent_window.winfo_width(), parent_window.winfo_height()
+        vw, vh = view_window.winfo_width(), view_window.winfo_height(); x = px + (pw // 2) - (vw // 2); y = py + (ph // 2) - (vh // 2); view_window.geometry(f"+{x}+{y}")
+
+
+    # --- Admin Tools Dialog ---
+    # (All admin tools methods remain unchanged)
+    def open_admin_tools_dialog(self):
+        """Opens a separate window for Database Administration tasks."""
+        self.admin_main_dialog = tk.Toplevel(self.root); self.admin_main_dialog.title("Admin Tools"); self.admin_main_dialog.transient(self.root)
+        dialog_frame = ttk.Frame(self.admin_main_dialog, padding="15"); dialog_frame.grid(row=0, column=0, sticky="nsew"); dialog_frame.columnconfigure(0, weight=1)
+        admin_actions = {"search_view": "Search/View/Edit/Delete Records", "add_player": "Add Player", "view_players": "View Players", "backup_db": "Backup Database"}
+        current_row = 0
+        for key, text in admin_actions.items():
+            button = None
+            if key == "search_view": button = ttk.Button(dialog_frame, text=text, command=self.open_search_view_window)
+            elif key == "add_player": button = ttk.Button(dialog_frame, text=text, command=self._add_player)
+            elif key == "view_players": button = ttk.Button(dialog_frame, text=text, command=self.open_view_players_window)
+            elif key == "backup_db": button = ttk.Button(dialog_frame, text=text, command=self._backup_database)
+            if button: button.grid(row=current_row, column=0, sticky=tk.EW, padx=10, pady=4)
+            current_row += 1
+        ttk.Separator(dialog_frame, orient=tk.HORIZONTAL).grid(row=current_row, column=0, sticky=tk.EW, pady=10, padx=5); current_row += 1
+        ttk.Button(dialog_frame, text="Close", command=self.admin_main_dialog.destroy).grid(row=current_row, column=0, pady=(5, 0), padx=10)
+        self.admin_main_dialog.update_idletasks(); rx, ry, rw, rh = self.root.winfo_rootx(), self.root.winfo_rooty(), self.root.winfo_width(), self.root.winfo_height()
+        dw, dh = self.admin_main_dialog.winfo_width(), self.admin_main_dialog.winfo_height(); x = rx + (rw // 2) - (dw // 2); y = ry + (rh // 2) - (dh // 2); self.admin_main_dialog.geometry(f"+{x}+{y}")
+
+    def _admin_action_placeholder(self, action_name, parent_dialog=None):
+        """Shows an info message for unimplemented admin actions."""
+        parent = parent_dialog if parent_dialog and parent_dialog.winfo_exists() else self.root
+        messagebox.showinfo("Not Implemented", f"The '{action_name}' feature is not yet implemented.", parent=parent)
+
+
+    # --- Graphing Methods ---
+    # (All graphing methods remain unchanged)
+    def _check_graph_deps(self, require_seaborn=False, require_numpy=False):
+        """Checks if necessary graphing libraries are available."""
+        numpy_ok = True
+        if require_numpy and not NUMPY_AVAILABLE: messagebox.showerror("Graphing Error", "Numpy library is required for this graph.\nPlease install using: pip install numpy", parent=self.root); print("Error: Numpy not found, required for this graph."); numpy_ok = False; return False
+        if not MATPLOTLIB_AVAILABLE: messagebox.showerror("Graphing Error", "Matplotlib library is not installed.\nPlease install using: pip install matplotlib", parent=self.root); return False
+        if not PANDAS_AVAILABLE: messagebox.showerror("Graphing Error", "Pandas library is not installed.\nPlease install using: pip install pandas", parent=self.root); return False
+        if require_seaborn and not SEABORN_AVAILABLE: messagebox.showerror("Graphing Error", "Seaborn library is not installed.\nPlease install using: pip install seaborn", parent=self.root); return False
+        return True
+
+    def show_score_distribution_boxplot(self, start_date=None, end_date=None, player_focus=None):
+        """Graph 1: Player Score Distribution (Box Plot), filtered by date. Group analysis only."""
+        if not self._check_graph_deps(require_numpy=True): return
+        if player_focus: messagebox.showinfo("Group Analysis Graph", f"The Score Distribution Box Plot shows group data.\nIgnoring player focus selection ('{player_focus}').", parent=self.root)
+        date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""; print(f"Generating score distribution box plot{date_info}..."); self.status_label.config(text="Generating box plot...", foreground="blue")
+        records = self._fetch_game_data("player1_name, player1_score, player2_name, player2_score", start_date=start_date, end_date=end_date)
+        if records is None or not records: messagebox.showinfo("No Data", f"No game records found{date_info}.", parent=self.root); self.status_label.config(text="No records for graph.", foreground="blue"); return
+        try:
+            scores_by_player = defaultdict(list)
+            for p1n, p1s, p2n, p2s in records:
+                if p1n and p1s is not None: scores_by_player[p1n].append(p1s)
+                if p2n and p2s is not None: scores_by_player[p2n].append(p2s)
+            filtered_scores = {name: scores for name, scores in scores_by_player.items() if len(scores) >= MIN_GAMES_FOR_BOXPLOT}
+            if not filtered_scores: messagebox.showinfo("Insufficient Data", f"No players found with at least {MIN_GAMES_FOR_BOXPLOT} games{date_info}.", parent=self.root); self.status_label.config(text="Insufficient data.", foreground="blue"); return
+            sorted_player_names = sorted(filtered_scores.keys()); data_to_plot = [filtered_scores[name] for name in sorted_player_names]
+            plt.style.use('seaborn-v0_8-darkgrid'); fig, ax = plt.subplots(figsize=(max(8, len(sorted_player_names)*0.7), 7))
+            bp = ax.boxplot(data_to_plot, patch_artist=True, showmeans=True, meanprops={"marker":"o", "markerfacecolor":"white", "markeredgecolor":"black", "markersize":"6"}, medianprops={"color":"orange", "linewidth":1.5})
+            if NUMPY_AVAILABLE and np: colors = plt.cm.viridis(np.linspace(0, 1, len(data_to_plot)));
+            else: colors = ['lightblue'] * len(data_to_plot) # Fallback color
+            for patch, color in zip(bp['boxes'], colors): patch.set_facecolor(color); patch.set_alpha(0.7)
+            ax.set_xticklabels(sorted_player_names); ax.set_xlabel("Player"); ax.set_ylabel("Score")
+            title = f"Player Score Distribution (Min. {MIN_GAMES_FOR_BOXPLOT} Games)";
+            if date_info: title += f"\n{date_info.strip()}"; ax.set_title(title)
+            plt.xticks(rotation=45, ha='right'); plt.grid(axis='y', linestyle='--', alpha=0.7); plt.tight_layout(); plt.show()
+            self.status_label.config(text="Box plot generated.", foreground="blue"); print("Box plot displayed.")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating box plot: {e}", parent=self.root); self.status_label.config(text=f"Box Plot Error: {e}", foreground="red"); print(f"Box plot error: {e}")
+        finally: pass
+
+    def _prompt_player_selection_dialog(self, player_list, title="Select Player", prompt="Select a player:"):
+        """Creates a Toplevel window with a Listbox for player selection."""
+        dialog = tk.Toplevel(self.root); dialog.title(title); dialog.transient(self.root); dialog.geometry("300x350"); dialog.resizable(False, False)
+        selected_player = tk.StringVar(dialog, value=""); main_frame = ttk.Frame(dialog, padding="10"); main_frame.pack(expand=True, fill=tk.BOTH)
+        ttk.Label(main_frame, text=prompt, wraplength=280).pack(pady=(0, 10))
+        list_frame = ttk.Frame(main_frame); list_frame.pack(expand=True, fill=tk.BOTH, pady=(0, 10))
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL); listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, exportselection=False, height=10)
+        scrollbar.config(command=listbox.yview); scrollbar.pack(side=tk.RIGHT, fill=tk.Y); listbox.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+        for player in player_list: listbox.insert(tk.END, player)
+        if player_list: listbox.selection_set(0); listbox.activate(0); listbox.see(0)
+        def on_select(): selection_indices = listbox.curselection(); selected_player.set(listbox.get(selection_indices[0]) if selection_indices else ""); dialog.destroy()
+        def on_cancel(): selected_player.set(""); dialog.destroy()
+        button_frame = ttk.Frame(main_frame); button_frame.pack(fill=tk.X); button_frame.columnconfigure(0, weight=1); button_frame.columnconfigure(1, weight=0); button_frame.columnconfigure(2, weight=0)
+        ttk.Button(button_frame, text="Select", command=on_select).grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(button_frame, text="Cancel", command=on_cancel).grid(row=0, column=2, padx=5, pady=5)
+        listbox.bind("<Double-Button-1>", lambda event: on_select()); dialog.bind("<Return>", lambda event: on_select()); dialog.bind("<Escape>", lambda event: on_cancel())
+        dialog.grab_set(); dialog.wait_window(); result = selected_player.get(); return result if result else None
+
+    def prompt_and_show_score_trend(self, start_date=None, end_date=None, player_focus=None):
+        """Graph 2: Player Score Trend. Uses player_focus or prompts."""
+        if not self._check_graph_deps(): return
+        date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""; player_to_plot = player_focus
+        if not player_to_plot:
+            print(f"Fetching players for trend graph prompt{date_info}..."); self.status_label.config(text="Fetching players for selection...", foreground="blue")
+            records_names = self._fetch_game_data("player1_name, player2_name", start_date=start_date, end_date=end_date)
+            if records_names is None: self.status_label.config(text="Error fetching player data.", foreground="red"); return
+            if not records_names: messagebox.showinfo("No Data", f"No game records found{date_info}.", parent=self.root); self.status_label.config(text="No records found.", foreground="blue"); return
+            players = sorted(list(set(p for p1n, p2n in records_names for p in (p1n, p2n) if p)))
+            if not players: messagebox.showinfo("No Data", f"No valid player names found{date_info}.", parent=self.root); self.status_label.config(text="No players found.", foreground="blue"); return
+            self.status_label.config(text="Select player for trend graph...", foreground="blue")
+            player_to_plot = self._prompt_player_selection_dialog(players, title="Select Player for Trend Graph", prompt=f"Select a player to plot score trend{date_info}:")
+            if not player_to_plot: self.status_label.config(text="Trend graph cancelled.", foreground="orange"); print("Trend graph cancelled by user."); return
+        print(f"Generating score trend for {player_to_plot}{date_info}..."); self.status_label.config(text=f"Generating trend for {player_to_plot}...", foreground="blue")
+        player_data = self._fetch_game_data(columns="game_date, player1_name, player1_score, player2_name, player2_score", order_by="game_date ASC", start_date=start_date, end_date=end_date, player_name=player_to_plot)
+        if not player_data: messagebox.showinfo("No Data", f"No scores found for player '{player_to_plot}'{date_info}.", parent=self.root); self.status_label.config(text=f"No data for {player_to_plot}.", foreground="blue"); return
+        dates = []; scores = []
+        for row in player_data:
+            game_dt, p1n, p1s, p2n, p2s = row[0], row[1], row[2], row[3], row[4]; score = p1s if p1n == player_to_plot and p1s is not None else (p2s if p2n == player_to_plot and p2s is not None else None)
+            if score is not None:
+                try: dates.append(datetime.strptime(game_dt, '%Y-%m-%d')); scores.append(score)
+                except (ValueError, TypeError): print(f"Warning: Skipping record with invalid date/score for trend: {row}"); continue
+        if not dates or not scores: messagebox.showinfo("No Data", f"No valid date/score entries found for '{player_to_plot}'{date_info}.", parent=self.root); self.status_label.config(text=f"No valid data for {player_to_plot}.", foreground="blue"); return
+        try:
+            df = pd.DataFrame({'Date': dates, 'Score': scores}).sort_values(by='Date'); rolling_avg = df['Score'].rolling(window=5, min_periods=1).mean()
+            plt.style.use('seaborn-v0_8-darkgrid'); fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(df['Date'], df['Score'], marker='o', linestyle='-', markersize=4, label='Actual Score', alpha=0.6, zorder=2)
+            ax.plot(df['Date'], rolling_avg, marker='', linestyle='--', color='red', linewidth=1.5, label='5-Game Rolling Avg', zorder=3)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d')); ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=12)); fig.autofmt_xdate()
+            title = f"Score Trend for {player_to_plot}";
+            if date_info: title += f"\n{date_info.strip()}"; ax.set_xlabel("Game Date"); ax.set_ylabel("Score"); ax.set_title(title)
+            ax.legend(); ax.grid(True, linestyle='--', alpha=0.6); plt.tight_layout(); plt.show()
+            self.status_label.config(text=f"Trend graph for {player_to_plot} generated.", foreground="blue"); print(f"Trend graph for {player_to_plot} displayed.")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating trend graph: {e}", parent=self.root); self.status_label.config(text=f"Trend Graph Error: {e}", foreground="red"); print(f"Trend graph error: {e}")
+        finally: pass
+
+    def show_h2h_heatmap(self, start_date=None, end_date=None, player_focus=None):
+        """Graph 3: Head-to-Head Win Percentage Matrix (Heatmap). Ignores player_focus."""
+        if not self._check_graph_deps(require_seaborn=True): return
+        if player_focus: messagebox.showinfo("Group Analysis Graph", f"The Head-to-Head Heatmap shows group data.\nIgnoring player focus selection ('{player_focus}').", parent=self.root)
+        date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""; print(f"Generating H2H heatmap{date_info}..."); self.status_label.config(text="Generating H2H heatmap...", foreground="blue")
+        records = self._fetch_game_data("player1_name, player1_score, player2_name, player2_score", start_date=start_date, end_date=end_date)
+        if records is None or not records: messagebox.showinfo("No Data", f"No game records found{date_info}.", parent=self.root); self.status_label.config(text="No records for heatmap.", foreground="blue"); return
+        try:
+            h2h_wins = defaultdict(lambda: defaultdict(int)); players = set()
+            for p1n, p1s, p2n, p2s in records:
+                if not p1n or not p2n or p1s is None or p2s is None or p1n == p2n: continue
+                players.add(p1n); players.add(p2n)
+                if p1s > p2s: h2h_wins[p1n][p2n] += 1
+                elif p2s > p1s: h2h_wins[p2n][p1n] += 1
+            if len(players) < 2: messagebox.showinfo("Insufficient Data", f"Need at least 2 players with games played against each other{date_info}.", parent=self.root); self.status_label.config(text="Insufficient data for heatmap.", foreground="blue"); return
+            sorted_players = sorted(list(players)); win_pct_matrix = pd.DataFrame(index=sorted_players, columns=sorted_players, dtype=float)
+            for p1 in sorted_players:
+                for p2 in sorted_players:
+                    if p1 == p2: win_pct_matrix.loc[p1, p2] = pd.NA; continue
+                    p1_vs_p2_wins = h2h_wins[p1].get(p2, 0); p2_vs_p1_wins = h2h_wins[p2].get(p1, 0); total_non_tie_games = p1_vs_p2_wins + p2_vs_p1_wins
+                    win_pct_matrix.loc[p1, p2] = (p1_vs_p2_wins / total_non_tie_games) if total_non_tie_games > 0 else pd.NA
+            mask = win_pct_matrix.isnull(); plt.style.use('seaborn-v0_8-whitegrid'); plt.figure(figsize=(max(8, len(sorted_players)*0.8), max(6, len(sorted_players)*0.6)))
+            sns.heatmap(win_pct_matrix, mask=mask, annot=True, fmt=".1%", cmap="coolwarm_r", linewidths=.5, linecolor='lightgray', cbar=True, cbar_kws={'label': 'Win % (Row Player vs Column Player)'}, annot_kws={"size": 8})
+            title = "Head-to-Head Win Percentage Matrix";
+            if date_info: title += f"\n{date_info.strip()}"; plt.title(title); plt.xlabel("Opponent"); plt.ylabel("Player")
+            plt.xticks(rotation=45, ha='right'); plt.yticks(rotation=0); plt.tight_layout(); plt.show()
+            self.status_label.config(text="H2H heatmap generated.", foreground="blue"); print("H2H heatmap displayed.")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating heatmap: {e}", parent=self.root); self.status_label.config(text=f"Heatmap Error: {e}", foreground="red"); print(f"Heatmap error: {e}")
+        finally: pass
+
+    def show_h2h_wl_heatmap(self, start_date=None, end_date=None, player_focus=None):
+        """Graph: Head-to-Head Win-Loss Record Matrix (Heatmap). Ignores player_focus."""
+        if not self._check_graph_deps(require_seaborn=True): return
+        if player_focus: messagebox.showinfo("Group Analysis Graph", f"The Head-to-Head W-L Heatmap shows group data.\nIgnoring player focus selection ('{player_focus}').", parent=self.root)
+        date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""; print(f"Generating H2H W-L heatmap{date_info}..."); self.status_label.config(text="Generating H2H W-L heatmap...", foreground="blue")
+        records = self._fetch_game_data("player1_name, player1_score, player2_name, player2_score", start_date=start_date, end_date=end_date)
+        if records is None or not records: messagebox.showinfo("No Data", f"No game records found{date_info}.", parent=self.root); self.status_label.config(text="No records for W-L heatmap.", foreground="blue"); return
+        try:
+            h2h_wins = defaultdict(lambda: defaultdict(int)); players = set()
+            for p1n, p1s, p2n, p2s in records:
+                if not p1n or not p2n or p1s is None or p2s is None or p1n == p2n: continue
+                players.add(p1n); players.add(p2n)
+                if p1s > p2s: h2h_wins[p1n][p2n] += 1
+                elif p2s > p1s: h2h_wins[p2n][p1n] += 1
+            if len(players) < 2: messagebox.showinfo("Insufficient Data", f"Need at least 2 players with games played against each other{date_info}.", parent=self.root); self.status_label.config(text="Insufficient data for W-L heatmap.", foreground="blue"); return
+            sorted_players = sorted(list(players)); wl_matrix = pd.DataFrame(index=sorted_players, columns=sorted_players, dtype=str)
+            for p1 in sorted_players:
+                for p2 in sorted_players:
+                    if p1 == p2: wl_matrix.loc[p1, p2] = ""; continue
+                    p1_vs_p2_wins = h2h_wins[p1].get(p2, 0); p2_vs_p1_wins = h2h_wins[p2].get(p1, 0); total_games = p1_vs_p2_wins + p2_vs_p1_wins
+                    if total_games > 0: wl_matrix.loc[p1, p2] = f"{p1_vs_p2_wins}-{p2_vs_p1_wins}"
+                    else: wl_matrix.loc[p1, p2] = ""
+            plt.style.use('seaborn-v0_8-whitegrid'); plt.figure(figsize=(max(8, len(sorted_players)*0.9), max(6, len(sorted_players)*0.7)))
+            sns.heatmap(pd.DataFrame(0, index=wl_matrix.index, columns=wl_matrix.columns), annot=wl_matrix, fmt='s', cmap="Greys", cbar=False, linewidths=0.5, linecolor='lightgray', annot_kws={"size": 8, "weight": "bold"})
+            title = "Head-to-Head Win-Loss Record";
+            if date_info: title += f"\n{date_info.strip()}"; plt.title(title); plt.xlabel("Opponent"); plt.ylabel("Player")
+            plt.xticks(rotation=45, ha='right'); plt.yticks(rotation=0); plt.tight_layout(); plt.show()
+            self.status_label.config(text="H2H W-L heatmap generated.", foreground="blue"); print("H2H W-L heatmap displayed.")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating W-L heatmap: {e}", parent=self.root); self.status_label.config(text=f"W-L Heatmap Error: {e}", foreground="red"); print(f"W-L Heatmap error: {e}")
+        finally: pass
+
+    def show_win_by_absolute_bingos_bar(self, start_date=None, end_date=None, player_focus=None):
+        """Graph: Win % by Absolute Bingos Played (Bar Chart). Requires player focus."""
+        if not self._check_graph_deps(): return
+        if not player_focus: messagebox.showerror("Player Required", "The 'Win % by Absolute Bingos' graph requires a specific player.", parent=self.root); self.status_label.config(text="Graph requires player focus.", foreground="orange"); return
+        date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""; print(f"Generating 'Win % by Absolute Bingos' bar chart for {player_focus}{date_info}..."); self.status_label.config(text=f"Generating Win % (Abs Bingos) for {player_focus}...", foreground="blue")
+        records = self._fetch_game_data(columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos", start_date=start_date, end_date=end_date, player_name=player_focus)
+        if records is None: self.status_label.config(text="Failed to fetch data for graph.", foreground="red"); return
+        if not records: messagebox.showinfo("No Data", f"No game records found for player '{player_focus}'{date_info}.", parent=self.root); self.status_label.config(text=f"No records for {player_focus}.", foreground="blue"); return
+        #print(f"DEBUG (Abs Bingos Bar): Fetched {len(records)} records for {player_focus}. Content:")
+        for i, rec in enumerate(records):
+            try: p1n, p1s, p2n, p2s = rec[2], rec[3], rec[5], rec[6];
+            #print(f"  Rec {i}: P1={p1n}({p1s}) vs P2={p2n}({p2s})")
+            except IndexError: print(f"  Rec {i}: Malformed - {rec}")
+        absolute_stats, _ = self._calculate_win_by_bingo_stats(records, player_focus)
+        if not absolute_stats: messagebox.showinfo("No Data", f"Could not calculate bingo win statistics for '{player_focus}'{date_info}.\n(This usually means only tied games were found).", parent=self.root); self.status_label.config(text=f"No bingo win stats for {player_focus}.", foreground="blue"); return
+        sorted_counts = sorted(absolute_stats.keys()); win_percentages = []; labels = []; record_strs = []
+        for count in sorted_counts:
+            stats = absolute_stats[count]; wins = stats['w']; losses = stats['l']; total_decided = wins + losses
+            win_pct = (wins / total_decided * 100) if total_decided > 0 else 0.0; win_percentages.append(win_pct)
+            labels.append(f"{count}"); record_strs.append(f"W:{wins} L:{losses}")
+        try:
+            plt.style.use('seaborn-v0_8-darkgrid'); fig, ax = plt.subplots(figsize=(max(6, len(labels)*0.8), 6))
+            if NUMPY_AVAILABLE and np: bar_colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(labels)))
+            else: bar_colors = 'skyblue'
+            x_pos = range(len(labels)); bars = ax.bar(x_pos, win_percentages, color=bar_colors); ax.bar_label(bars, fmt='%.1f%%', padding=3, fontsize=9)
+            ax.set_xlabel("Absolute Number of Bingos Played"); ax.set_ylabel("Win Percentage (%)"); ax.set_ylim(0, 105); ax.yaxis.set_major_formatter(plt.FuncFormatter('{:.0f}%'.format))
+            ax.set_xticks(x_pos); ax.set_xticklabels(labels)
+            title = f"Win % by Absolute Bingos Played for {player_focus}";
+            if date_info: title += f"\n{date_info.strip()}"; ax.set_title(title)
+            plt.grid(axis='y', linestyle='--', alpha=0.7); plt.tight_layout(); plt.show()
+            self.status_label.config(text=f"Win % (Abs Bingos) graph for {player_focus} generated.", foreground="blue"); print(f"Win % (Abs Bingos) graph for {player_focus} displayed.")
+        except Exception as e: messagebox.showerror("Graphing Error", f"Error generating 'Win % by Absolute Bingos' bar chart: {e}", parent=self.root); self.status_label.config(text=f"Graph Error: {e}", foreground="red"); print(f"Graph error (Win % Abs Bingos): {e}")
+        finally: pass
+
+    def show_win_by_bingo_difference_bar(self, start_date=None, end_date=None, player_focus=None):
+        """Graph: Win % by Bingo Difference vs Opponent (Bar Chart). Requires player focus."""
+        # Check dependencies
+        if not self._check_graph_deps(): return
+
+        # --- Validate Player Focus ---
+        if not player_focus:
+            messagebox.showerror("Player Required", "The 'Win % by Bingo Difference' graph requires a specific player to be selected in 'Analysis Focus'.", parent=self.root)
+            self.status_label.config(text="Graph requires player focus.", foreground="orange")
+            return
+        # --- End Validation ---
+
+        date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""
+        print(f"Generating 'Win % by Bingo Difference' bar chart for {player_focus}{date_info}...")
+        self.status_label.config(text=f"Generating Win % (Bingo Diff) for {player_focus}...", foreground="blue")
+
+        # Fetch records for the specific player (using 8 columns for consistency)
+        records = self._fetch_game_data(
+            columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos", # Match report fetch
+            start_date=start_date,
+            end_date=end_date,
+            player_name=player_focus # Filter data fetch
+        )
+
+        if records is None: # Fetch error
+            self.status_label.config(text="Failed to fetch data for graph.", foreground="red")
+            return
+        if not records:
+            messagebox.showinfo("No Data", f"No game records found for player '{player_focus}'{date_info}.", parent=self.root)
+            self.status_label.config(text=f"No records for {player_focus}.", foreground="blue")
+            return
+
+        # --- Detailed Debug Print ---
+        #print(f"DEBUG (Bingo Diff Bar): Fetched {len(records)} records for {player_focus}. Content:") # Identify which function is printing
+        # Indices based on the NEW fetch call columns string:
+        # id[0], game_date[1], p1_name[2], p1_score[3], p1_bingos[4], p2_name[5], p2_score[6], p2_bingos[7]
+        for i, rec in enumerate(records):
+            try:
+                p1n, p1s, p2n, p2s = rec[2], rec[3], rec[5], rec[6] # Indices 2, 3, 5, 6
+                #print(f"  Rec {i}: P1={p1n}({p1s}) vs P2={p2n}({p2s})")
+            except IndexError:
+                print(f"  Rec {i}: Malformed - {rec}")
+        # --- End Detailed Debug Print ---
+
+        # Calculate stats (using the function that expects 8 columns now)
+        _, difference_stats = self._calculate_win_by_bingo_stats(records, player_focus)
+
+        if not difference_stats:
+            messagebox.showinfo("No Data", f"Could not calculate bingo difference win statistics for '{player_focus}'{date_info}.\n(This usually means only tied games were found).", parent=self.root)
+            self.status_label.config(text=f"No non-tie bingo diff stats for {player_focus}.", foreground="blue")
+            return
+
+        # Prepare data for plotting
+        sorted_diffs = sorted(difference_stats.keys())
+        win_percentages = []
+        labels = []
+        record_strs = []
+
+        # --- Corrected Loop Logic ---
+        for diff in sorted_diffs:
+            stats = difference_stats[diff]
+            wins = stats['w']
+            losses = stats['l']
+            total_decided = wins + losses
+            win_pct = (wins / total_decided * 100) if total_decided > 0 else 0.0
+            win_percentages.append(win_pct) # Append percentage for every diff
+
+            # Determine the label based on the diff value
+            if diff > 0:
+                label = f"+{diff}"
+            elif diff < 0:
+                label = f"{diff}"
+            else:
+                label = "0"
+
+            # Append the label and record string for every diff
+            labels.append(label)
+            record_strs.append(f"W:{wins} L:{losses}")
+        # --- End Corrected Loop Logic ---
+
+        # --- Plotting Block ---
+        try:
+            plt.style.use('seaborn-v0_8-darkgrid')
+            fig, ax = plt.subplots(figsize=(max(6, len(labels)*0.8), 6)) # Adjust width
+
+            # Use numpy for color mapping if available, otherwise default color
+            if NUMPY_AVAILABLE and np: # Check both flag and that np is not None
+                bar_colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(labels)))
+            else:
+                bar_colors = 'skyblue' # Fallback color
+
+            # --- Corrected X-axis plotting ---
+            x_pos = range(len(labels)) # Use numerical positions for bars
+            bars = ax.bar(x_pos, win_percentages, color=bar_colors)
+
+            # Add percentage labels on top of bars
+            ax.bar_label(bars, fmt='%.1f%%', padding=3, fontsize=9)
+
+            ax.set_xlabel("Bingo Difference (Player - Opponent)")
+            ax.set_ylabel("Win Percentage (%)")
+            ax.set_ylim(0, 105) # Extend Y axis slightly above 100%
+            ax.yaxis.set_major_formatter(plt.FuncFormatter('{:.0f}%'.format)) # Format Y axis ticks
+
+            # Set the ticks and labels for the X-axis
+            ax.set_xticks(x_pos)
+            ax.set_xticklabels(labels)
+            # --- End Corrected X-axis plotting ---
+
+            title = f"Win % by Bingo Difference vs Opponent for {player_focus}"
+            if date_info: title += f"\n{date_info.strip()}"
+            ax.set_title(title)
+
+            # plt.xticks(rotation=0) # Remove this line - superseded by set_xticks/set_xticklabels
+            plt.grid(axis='y', linestyle='--', alpha=0.7)
+            plt.tight_layout()
+            plt.show() # Display the plot
+
+            # Success message
+            self.status_label.config(text=f"Win % (Bingo Diff) graph for {player_focus} generated.", foreground="blue")
+            print(f"Win % (Bingo Diff) graph for {player_focus} displayed.")
+
+        except Exception as e:
+            messagebox.showerror("Graphing Error", f"Error generating 'Win % by Bingo Difference' bar chart: {e}", parent=self.root)
+            self.status_label.config(text=f"Graph Error: {e}", foreground="red")
+            print(f"Graph error (Win % Bingo Diff): {e}")
+
+        finally:
+            # Optional: Cleanup or reset status after a delay
+            # self.root.after(5000, lambda: self.status_label.config(text="Ready."))
+            pass
+
+
+    # --- Custom Report Generation ---
+    # (All report generation methods remain unchanged)
+    def open_report_picker_dialog(self):
+        """Opens a dialog window for report selection."""
+        dialog = tk.Toplevel(self.root); dialog.title("Report Picker"); dialog.transient(self.root)
+        dialog_frame = ttk.Frame(dialog, padding="10"); dialog_frame.pack(expand=True, fill=tk.BOTH)
+        date_frame = ttk.LabelFrame(dialog_frame, text="Date Range (Optional, YYYY-MM-DD)", padding="5"); date_frame.pack(fill=tk.X, pady=(0, 10))
+        date_frame.columnconfigure(1, weight=1); date_frame.columnconfigure(4, weight=1)
+        ttk.Label(date_frame, text="Start Date:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
+        start_date_entry = ttk.Entry(date_frame, width=12); start_date_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=3)
+        ttk.Label(date_frame, text="End Date:").grid(row=0, column=3, sticky=tk.W, padx=(10, 5), pady=3)
+        end_date_entry = ttk.Entry(date_frame, width=12); end_date_entry.grid(row=0, column=4, sticky=(tk.W, tk.E), padx=5, pady=3)
+        try: end_date_entry.insert(0, date.today().strftime('%Y-%m-%d'))
+        except Exception as e: print(f"Error setting default end date: {e}"); end_date_entry.insert(0, "YYYY-MM-DD")
+        if TKCALENDAR_AVAILABLE:
+            ttk.Button(date_frame, text="...", width=3, command=lambda entry=start_date_entry, parent=dialog: self._open_calendar_for_entry(entry, parent)).grid(row=0, column=2, sticky=tk.W, padx=(0, 5), pady=3)
+            ttk.Button(date_frame, text="...", width=3, command=lambda entry=end_date_entry, parent=dialog: self._open_calendar_for_entry(entry, parent)).grid(row=0, column=5, sticky=tk.W, padx=(0, 5), pady=3)
+        quick_button_frame = ttk.Frame(date_frame); quick_button_frame.grid(row=1, column=0, columnspan=6, pady=(5, 2), sticky=tk.EW)
+        for i in range(4): quick_button_frame.columnconfigure(i, weight=1)
+        ttk.Button(quick_button_frame, text="This Week", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_week(s, e)).grid(row=0, column=0, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="This Month", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_month(s, e)).grid(row=0, column=1, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="This Year", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_year(s, e)).grid(row=0, column=2, padx=2, sticky=tk.EW)
+        ttk.Button(quick_button_frame, text="All Time", command=lambda s=start_date_entry, e=end_date_entry: self._set_date_range_all(s, e)).grid(row=0, column=3, padx=2, sticky=tk.EW)
+        player_frame = ttk.LabelFrame(dialog_frame, text="Analysis Focus", padding="5"); player_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(player_frame, text="Analyze:").pack(side=tk.LEFT, padx=(5,5))
+        player_combo = ttk.Combobox(player_frame, state='readonly', width=30); self._populate_player_filter_combobox(player_combo, include_group_option=True); player_combo.current(0)
+        player_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,5), pady=5)
+        section_frame = ttk.LabelFrame(dialog_frame, text="Report Sections", padding="5"); section_frame.pack(expand=True, fill=tk.BOTH, pady=(0, 10))
+        report_tree = ttk.Treeview(section_frame, selectmode='extended', show='tree', height=10); report_tree.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5, pady=5)
+        tree_scrollbar = ttk.Scrollbar(section_frame, orient="vertical", command=report_tree.yview); tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0,5), pady=5)
+        report_tree.configure(yscrollcommand=tree_scrollbar.set)
+        def populate_tree(parent_id, items):
+            for item_data in items:
+                item_id, display_name, children = item_data; node = report_tree.insert(parent_id, tk.END, iid=item_id, text=display_name, open=True)
+                if children: child_items = [(k,) + v for k, v in children.items()]; populate_tree(node, child_items)
+        populate_tree('', self.report_tree_structure)
+        button_frame = ttk.Frame(dialog_frame); button_frame.pack(fill=tk.X, pady=(5, 0)); button_frame.columnconfigure(0, weight=1); button_frame.columnconfigure(1, weight=0); button_frame.columnconfigure(2, weight=0); button_frame.columnconfigure(3, weight=0)
+        ttk.Button(button_frame, text="Show Report", command=lambda d=dialog, s=start_date_entry, e=end_date_entry, pc=player_combo, tree=report_tree: self._trigger_show_report(d, s.get(), e.get(), pc.get(), tree.selection())).grid(row=0, column=1, padx=5, pady=5, sticky=tk.E)
+        ttk.Button(button_frame, text="Save to File", command=lambda d=dialog, s=start_date_entry, e=end_date_entry, pc=player_combo, tree=report_tree: self.generate_custom_report(d, s.get(), e.get(), pc.get(), tree.selection())).grid(row=0, column=2, padx=5, pady=5, sticky=tk.E)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).grid(row=0, column=3, padx=5, pady=5, sticky=tk.E)
+        dialog.wait_window()
+
+
+    def _generate_verbal_summary_text(self, player_stats_list, avg_score_data, high_score_data, bingo_stats_results, player_focus, start_date_str, end_date_str):
+        """Generates the formatted text for the Verbal Summary report."""
+        lines = ["\n--- Verbal Player Summary ---"]
+
+        time_period_str = "all time"
+        if start_date_str and end_date_str:
+            time_period_str = f"the period from {start_date_str} to {end_date_str}"
+        elif start_date_str:
+            time_period_str = f"the period since {start_date_str}"
+        elif end_date_str:
+            time_period_str = f"the period up to {end_date_str}"
+
+        players_to_summarize = []
+        if player_focus:
+            # Find the specific player in player_stats_list
+            focused_player_data = next((p for p in player_stats_list if p['name'] == player_focus), None)
+            if focused_player_data:
+                players_to_summarize.append(focused_player_data)
+            else:
+                lines.append(f"\nNo data found for player: {player_focus} within the selected criteria.")
+                return "\n".join(lines)
+        else: # Group analysis
+            # Sort all players from player_stats_list alphabetically for sequential output
+            players_to_summarize = sorted(player_stats_list, key=lambda p: p['name'].lower())
+
+        if not players_to_summarize:
+            lines.append("\nNo player data available to generate verbal summaries for the selected criteria.")
+            return "\n".join(lines)
+
+        output_summaries = []
+        for player_data in players_to_summarize:
+            full_name = player_data['name']
+            first_name = full_name.split(' ', 1)[0] # Get first name
+
+            games_played = player_data.get('games', 0)
+            wins = player_data.get('wins', 0)
+            losses = player_data.get('losses', 0)
+            win_pct = player_data.get('win_pct', 0.0)
+            win_loss_record = f"{wins}-{losses}"
+
+            avg_score = "N/A"
+            if player_focus: # Single player focus
+                if avg_score_data and avg_score_data.get('single_player_avg') is not None:
+                    avg_score = f"{avg_score_data['single_player_avg']:.1f}"
+            else: # Group analysis
+                if avg_score_data and avg_score_data.get('player_avgs') and full_name in avg_score_data['player_avgs']:
+                    avg_score = f"{avg_score_data['player_avgs'][full_name]:.1f}"
+            
+            high_score = "N/A"
+            if player_focus: # Single player focus
+                if high_score_data and high_score_data.get('single_player_high') and high_score_data['single_player_high']['score'] > -1:
+                    high_score = str(high_score_data['single_player_high']['score'])
+            else: # Group analysis
+                if high_score_data and high_score_data.get('player_highs') and full_name in high_score_data['player_highs']:
+                    player_high = high_score_data['player_highs'][full_name]
+                    if player_high['score'] > -1:
+                        high_score = str(player_high['score'])
+
+            avg_bingos_per_game = "N/A"
+            if bingo_stats_results and 'avg_bingos_per_game' in bingo_stats_results:
+                player_bingo_avg_data = next((item for item in bingo_stats_results['avg_bingos_per_game'] if item[0] == full_name), None)
+                if player_bingo_avg_data:
+                    avg_bingos_per_game = f"{player_bingo_avg_data[1]:.1f}"
+
+
+            line1 = f"For {time_period_str}, {full_name} played {games_played} game{'s' if games_played != 1 else ''} with a win/loss record of {win_loss_record} - {win_pct:.1f}%."
+            line2 = f"{first_name} scored an average of {avg_score} points and had a high score of {high_score}. {first_name} played {avg_bingos_per_game} bingos per game."
+            output_summaries.append(line1 + "\n" + line2)
+
+        lines.extend(output_summaries)
+        return "\n\n".join(lines) # Separate player summaries with a blank line
+
+    def _generate_report_text(self, start_date_str, end_date_str, selected_player, selected_report_ids):
+        """\
+        Generates the report text based on selections, performing validation and calculations.\
+        Returns the report string on success, or None on failure or no data.\
+        Handles showing relevant error/info messages.\
+        """\
+        # --- Input Validation ---\
+        if not selected_report_ids:
+            print("Error: _generate_report_text called with no selected_report_ids.")
+            return None
+
+        group_analysis_text = "(Group Analysis)"
+        player_focus = None
+        if selected_player and selected_player != group_analysis_text:
+            if selected_player in APP_PLAYER_LIST:
+                player_focus = selected_player
+            else:
+                messagebox.showerror("Error", f"Invalid player selected: {selected_player}", parent=self.root)
+                return None
+
+        # --- Date Validation ---\
+        start_date_validated = None
+        end_date_validated = None
+        error_messages = []
+        start_date_str = start_date_str.strip()
+        if start_date_str:
+            try:
+                datetime.strptime(start_date_str, '%Y-%m-%d') # Use datetime class
+                start_date_validated = start_date_str
+            except ValueError:
+                error_messages.append(f"Invalid Start Date format: '{start_date_str}'. Use YYYY-MM-DD or leave blank.")
+        end_date_str = end_date_str.strip()
+        if end_date_str:
+            try:
+                datetime.strptime(end_date_str, '%Y-%m-%d') # Use datetime class
+                end_date_validated = end_date_str
+            except ValueError:
+                error_messages.append(f"Invalid End Date format: '{end_date_str}'. Use YYYY-MM-DD or leave blank.")
+        if start_date_validated and end_date_validated and start_date_validated > end_date_validated:
+             error_messages.append("Start Date cannot be after End Date.")
+        if error_messages:
+            messagebox.showerror("Date Error", "\n".join(error_messages), parent=self.root)
+            return None
+        # --- End Date Validation ---
+
+        print(f"Generating report text for sections: {selected_report_ids}")
+        print(f"Player Focus: {player_focus or 'Group Analysis'}")
+        print(f"Date Range: Start='{start_date_validated or 'Any'}' End='{end_date_validated or 'Any'}'")
+
+        # --- Fetch Data ---
+        required_cols = "id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos"
+        records = self._fetch_game_data(\
+            columns=required_cols, order_by="game_date DESC, id DESC",\
+            start_date=start_date_validated, end_date=end_date_validated\
+        )
+
+        if records is None:
+            self.status_label.config(text="Failed to fetch data for report.", foreground="red")
+            return None
+        if not records:
+            date_info = ""
+            if start_date_validated or end_date_validated: date_info = f" within the specified date range"
+            messagebox.showinfo("No Records", f"No records found{date_info}.", parent=self.root)
+            self.status_label.config(text="No records found for specified criteria.", foreground="blue")
+            return None
+
+        # --- Calculate Base Statistics ---
+        report_types_needed = set(self.report_id_map.get(rid) for rid in selected_report_ids if rid in self.report_id_map)
+        player_stats_list, h2h_stats, all_players_in_range = None, None, None
+        player_games, player_high_scores = None, None
+        avg_score_data = None
+        high_score_data = None
+        bingo_stats_results = None
+        win_by_abs_stats, win_by_diff_stats = None, None
+
+        try:
+            # Calculate Win/Loss/H2H/Highs if relevant sections selected
+            needs_player_h2h_high_calc = any(rt in ['player_summary', 'h2h', 'scoring_high', 'verbal_summary'] for rt in report_types_needed) or \
+                                         any(rt.startswith('bingo') for rt in report_types_needed)
+
+            if needs_player_h2h_high_calc:
+                 player_stats_list, h2h_stats, all_players_in_range, player_games, player_high_scores = \
+                     self._calculate_player_and_h2h_stats(records)
+
+            # Calculate Average Scores if needed
+            if 'scoring_avg' in report_types_needed or 'verbal_summary' in report_types_needed:
+                avg_score_data = self._calculate_avg_score(records, player_focus)
+
+            # Calculate Highest Scores (uses precalculated data)
+            if 'scoring_high' in report_types_needed or 'verbal_summary' in report_types_needed:
+                 if player_high_scores is not None:
+                     high_score_data = self._calculate_highest_score(records, player_high_scores, player_focus)
+                 elif needs_player_h2h_high_calc: # Only warn if it should have been calculated
+                     print("Warning: Highest score or verbal summary report selected, but base high score data (player_high_scores) was unexpectedly None.")
+
+            # Calculate standard Bingo Stats if needed by *those* specific reports
+            needs_standard_bingo_calc = any(rt in ['bingo_avg', 'bingo_avg_rank_7', 'bingo_avg_rank_8',
+                                                  'bingo_high_rank_7', 'bingo_high_rank_8', 'verbal_summary'] for rt in report_types_needed)
+            if needs_standard_bingo_calc:
+                if player_games is not None:
+                    bingo_stats_results = self._calculate_bingo_stats(records, player_games)
+                    if not bingo_stats_results.get('active_players'):
+                        print("Warning: Bingo or verbal summary sections selected, but no active players found in bingo stats calculation.")
+                elif needs_player_h2h_high_calc: # Only warn if player_games should have been available
+                    print("Warning: Bingo or verbal summary sections selected, but player game counts (player_games) were unexpectedly None. Skipping bingo stats.")
+                    bingo_stats_results = None
+            
+            # Calculate Win % by Bingo stats if needed
+            needs_win_by_bingo_calc = any(rt in ['bingo_win_abs', 'bingo_win_diff'] for rt in report_types_needed)
+            if needs_win_by_bingo_calc:
+                if player_focus:
+                    win_by_abs_stats, win_by_diff_stats = self._calculate_win_by_bingo_stats(records, player_focus)
+                else:
+                    print("Skipping Win % by Bingo calculation as no specific player is focused.")
+                    win_by_abs_stats, win_by_diff_stats = None, None
+
+        except Exception as e:
+             import traceback
+             print(f"Error during report statistics calculation: {e}")
+             traceback.print_exc()
+             messagebox.showerror("Calculation Error", f"Error calculating report statistics: {e}", parent=self.root)
+             self.status_label.config(text=f"Report Calc Error: {e}", foreground="red")
+             return None
+
+        # --- Generate Report Text Parts ---
+        report_parts = []
+        bingo_section_generated = False
+        try:
+            report_parts.append(self._generate_report_header_text())
+            header_info = []
+            if start_date_validated or end_date_validated:
+                 header_info.append(f"Date Range: {start_date_validated or 'Start'} to {end_date_validated or 'End'}")
+            header_info.append(f"Player Focus: {player_focus or 'Group Analysis'}")
+            if header_info: # Check if header_info has content
+                report_parts.extend(header_info)
+                # Ensure there's something to take max() of if header_info is not empty
+                valid_header_lines = [line for line in header_info if line]
+                if valid_header_lines:
+                    report_parts.append("-" * max(len(line) for line in valid_header_lines))
+
+
+            processing_order = [
+                'verbal_summary_report',
+                'standings_summary', 'games_all', 'scoring_avg', 'scoring_high',
+                'all_bingos_by_prob', # Added new report here
+                'bingo_avg', 'bingo_avg_rank_7', 'bingo_avg_rank_8',
+                'bingo_high_rank_7', 'bingo_high_rank_8',
+                'bingo_win_abs', 'bingo_win_diff'
+            ]
+
+            for report_id in processing_order:
+                if report_id not in selected_report_ids:
+                    continue
+
+                report_type = self.report_id_map.get(report_id)
+                
+                if report_type == "verbal_summary":
+                    if player_stats_list is not None and \
+                       avg_score_data is not None and \
+                       high_score_data is not None and \
+                       bingo_stats_results is not None:
+                        report_parts.append(self._generate_verbal_summary_text(\
+                            player_stats_list, avg_score_data, high_score_data, bingo_stats_results,\
+                            player_focus, start_date_validated, end_date_validated\
+                        ))
+                    else:
+                        report_parts.append("\n--- Verbal Player Summary ---\nData not available (underlying calculations skipped or failed).")
+                elif report_type == "all_games":
+                    report_parts.append(self._generate_all_games_list_text(records))
+                elif report_type == "player_summary":
+                    if player_stats_list is not None:
+                        report_parts.append(self._generate_player_summary_text(player_stats_list))
+                    else:
+                        report_parts.append("\n--- Player Win/Loss Records ---\nData not available (calculation skipped or failed).")
+                elif report_type == "h2h":
+                     if h2h_stats is not None and all_players_in_range is not None:
+                         report_parts.append(self._generate_h2h_text(h2h_stats, all_players_in_range))
+                     else:
+                         report_parts.append("\n--- Head-to-Head Records ---\nData not available (calculation skipped or failed).")
+                elif report_type == "scoring_avg":
+                    if avg_score_data is not None:
+                        report_parts.append(self._generate_avg_score_text(avg_score_data, player_focus))
+                    else:
+                        report_parts.append("\n--- Average Score ---\nData not available (calculation skipped or failed).")
+                elif report_type == "scoring_high":
+                     if high_score_data is not None:
+                         report_parts.append(self._generate_highest_score_text(high_score_data, player_focus))
+                     else:
+                         report_parts.append("\n--- Highest Score ---\nData not available (calculation skipped or failed).")
+                elif report_type == "all_player_bingos_by_index":
+                    if player_focus:
+                        # This report relies on the main 'records' list.
+                        # _calculate_all_player_bingos_by_index filters these records for the player_focus.
+                        bingos_7, bingos_8 = self._calculate_all_player_bingos_by_index(records, player_focus)
+                        report_parts.append(self._generate_all_player_bingos_by_index_text(bingos_7, bingos_8, player_focus))
+                    else:
+                        report_parts.append("\n--- All Bingos For Player, By Probability* ---\n(This report requires selecting a specific player in 'Analysis Focus')")
+                    bingo_section_generated = True # Ensure bingo footer is added if this section is generated
+                elif report_type in ['bingo_avg', 'bingo_avg_rank_7', 'bingo_avg_rank_8', 'bingo_high_rank_7', 'bingo_high_rank_8']:
+                    if bingo_stats_results:
+                        active_p = bingo_stats_results.get('active_players', [])
+                        has_7 = bingo_stats_results.get('has_7_map', False) # Default to False if key missing
+                        has_8 = bingo_stats_results.get('has_8_map', False) # Default to False
+                        
+                        if report_type == "bingo_avg": report_parts.append(self._generate_bingo_avg_text(bingo_stats_results.get('avg_bingos_per_game', []), active_p, player_focus))
+                        elif report_type == "bingo_avg_rank_7": report_parts.append(self._generate_bingo_avg_rank_7_text(bingo_stats_results.get('avg_rank_7', []), has_7, active_p, player_focus))
+                        elif report_type == "bingo_avg_rank_8": report_parts.append(self._generate_bingo_avg_rank_8_text(bingo_stats_results.get('avg_rank_8', []), has_8, active_p, player_focus))
+                        elif report_type == "bingo_high_rank_7": report_parts.append(self._generate_bingo_highest_rank_7_text(bingo_stats_results.get('highest_rank_7', []), has_7, active_p, player_focus))
+                        elif report_type == "bingo_high_rank_8": report_parts.append(self._generate_bingo_highest_rank_8_text(bingo_stats_results.get('highest_rank_8', []), has_8, active_p, player_focus))
+                        bingo_section_generated = True
+                    else:
+                        section_title = report_id.replace('bingo_', '').replace('_', ' ').title()
+                        if 'Rank' in section_title: section_title += "*"
+                        report_parts.append(f"\n--- {section_title} ---\nData not available (calculation skipped or failed).")
+                elif report_type == "bingo_win_abs":
+                    if player_focus and win_by_abs_stats is not None:
+                        report_parts.append(self._generate_win_by_absolute_bingos_text(win_by_abs_stats, player_focus))
+                    elif player_focus:
+                         report_parts.append("\n--- Win % By Absolute Bingos ---\nNo non-tie data available for this player.")
+                    else:
+                         report_parts.append("\n--- Win % By Absolute Bingos ---\n(Requires selecting a specific player in 'Analysis Focus')")
+                    bingo_section_generated = True
+                elif report_type == "bingo_win_diff":
+                    if player_focus and win_by_diff_stats is not None:
+                        report_parts.append(self._generate_win_by_bingo_difference_text(win_by_diff_stats, player_focus))
+                    elif player_focus:
+                         report_parts.append("\n--- Win % By Bingo Difference vs Opponent ---\nNo non-tie data available for this player.")
+                    else:
+                         report_parts.append("\n--- Win % By Bingo Difference vs Opponent ---\n(Requires selecting a specific player in 'Analysis Focus')")
+                    bingo_section_generated = True
+
+            if bingo_section_generated:
+                report_parts.append(self._generate_bingo_footer_text())
+
+        except Exception as e:
+             import traceback
+             print(f"Error during report formatting: {e}")
+             traceback.print_exc()
+             messagebox.showerror("Formatting Error", f"Error formatting report sections: {e}", parent=self.root)
+             self.status_label.config(text=f"Report Format Error: {e}", foreground="red")
+             return None
+
+        final_report_text = "\n".join(report_parts)
+        return final_report_text
+
+
+
+    def generate_custom_report(self, dialog_window, start_date_str, end_date_str, selected_player, selected_report_ids):
+        """Handles the "Save to File" action."""
+        self.status_label.config(text="Generating report for saving...", foreground="blue"); report_text = self._generate_report_text(start_date_str, end_date_str, selected_player, selected_report_ids)
+        if report_text is None:
+            if dialog_window and dialog_window.winfo_exists(): print("Report generation failed or no data found. Keeping picker open.")
+            else: print("Report generation failed or no data found."); return
+        if dialog_window and dialog_window.winfo_exists(): dialog_window.destroy()
+        self.status_label.config(text="Report generated. Prompting for save location...", foreground="blue")
+        try:
+            group_analysis_text = "(Group Analysis)"; player_focus = None;
+            if selected_player and selected_player != group_analysis_text: player_focus = selected_player
+            player_tag = f"_{player_focus.replace(' ', '_')}" if player_focus else "_Group"; date_tag = date.today().strftime('%Y%m%d'); default_filename = f"scrabble_report{player_tag}_{date_tag}.txt"
+            filepath = filedialog.asksaveasfilename(parent=self.root, defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")], initialfile=default_filename, title="Save Custom Report As")
+            if not filepath: self.status_label.config(text="Report save cancelled.", foreground="orange"); print("Report save cancelled."); return
+            try:
+                with open(filepath, 'w', encoding='utf-8') as f: f.write(report_text)
+                self.status_label.config(text=f"Report saved to {os.path.basename(filepath)}", foreground="green"); print(f"Custom report saved to {filepath}"); messagebox.showinfo("Save Successful", f"Custom Report saved to:\n{filepath}", parent=self.root)
+            except IOError as e: messagebox.showerror("File Error", f"Could not write report file: {e}", parent=self.root); print(f"File error saving report: {e}"); self.status_label.config(text=f"File Error: {e}", foreground="red")
+            except Exception as e: import traceback; print(f"Report saving error: {e}"); traceback.print_exc(); messagebox.showerror("Error", f"An unexpected error occurred during report saving: {e}", parent=self.root); self.status_label.config(text=f"Report Save Error: {e}", foreground="red")
+        except Exception as e: import traceback; print(f"Error during report saving process: {e}"); traceback.print_exc(); messagebox.showerror("Saving Error", f"An error occurred preparing to save the report: {e}", parent=self.root); self.status_label.config(text=f"Report Save Prep Error: {e}", foreground="red")
+
+
+
+    def _trigger_show_report(self, dialog_window, start_date_str, end_date_str, selected_player, selected_report_ids):
+        """Handles the "Show Report" action."""
+        self.status_label.config(text="Generating report for viewing...", foreground="blue"); report_text = self._generate_report_text(start_date_str, end_date_str, selected_player, selected_report_ids)
+        if report_text is None:
+            if dialog_window and dialog_window.winfo_exists(): print("Report generation failed or no data found. Keeping picker open.")
+            else: print("Report generation failed or no data found."); return
+        if dialog_window and dialog_window.winfo_exists(): dialog_window.destroy()
+        self._show_report_window(report_text); self.status_label.config(text="Report generated and displayed.", foreground="blue")
+
+    def _show_report_window(self, report_text):
+        """Creates and displays a Toplevel window with the report text."""
+        report_window = tk.Toplevel(self.root); report_window.title("Generated Report"); report_window.geometry("800x600"); report_window.transient(self.root)
+        main_frame = ttk.Frame(report_window, padding=5); main_frame.pack(expand=True, fill=tk.BOTH)
+        text_frame = ttk.Frame(main_frame); text_frame.pack(expand=True, fill=tk.BOTH, pady=(0, 5))
+        report_text_widget = tk.Text(text_frame, wrap='none', height=25, width=100, relief=tk.SUNKEN, borderwidth=1)
+        v_scroll = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=report_text_widget.yview); h_scroll = ttk.Scrollbar(text_frame, orient=tk.HORIZONTAL, command=report_text_widget.xview)
+        report_text_widget.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set); v_scroll.pack(side=tk.RIGHT, fill=tk.Y); h_scroll.pack(side=tk.BOTTOM, fill=tk.X); report_text_widget.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+        report_text_widget.insert(tk.END, report_text); report_text_widget.config(state=tk.DISABLED)
+        button_frame = ttk.Frame(main_frame); button_frame.pack(fill=tk.X); button_frame.columnconfigure(0, weight=1)
+        ttk.Button(button_frame, text="Save As...", command=lambda widget=report_text_widget: self._save_report_from_window(widget)).pack(side=tk.RIGHT, padx=(5, 10), pady=5)
+        ttk.Button(button_frame, text="Close", command=report_window.destroy).pack(side=tk.RIGHT, padx=(0, 5), pady=5)
+        report_window.update_idletasks(); screen_width = report_window.winfo_screenwidth(); screen_height = report_window.winfo_screenheight()
+        window_width = report_window.winfo_width(); window_height = report_window.winfo_height(); x = (screen_width // 2) - (window_width // 2); y = (screen_height // 2) - (window_height // 2)
+        report_window.geometry(f'{window_width}x{window_height}+{x}+{y}')
+        if report_window.grab_status(): report_window.wait_window()
+
+    def _save_report_from_window(self, text_widget):
+        """Handles saving the report text from the display window's Text widget."""
+        report_text = text_widget.get("1.0", tk.END).strip()
+        if not report_text: messagebox.showwarning("Empty Report", "There is no report content to save.", parent=text_widget.winfo_toplevel()); return
+        date_tag = date.today().strftime('%Y%m%d'); default_filename = f"scrabble_report_{date_tag}.txt"
+        filepath = filedialog.asksaveasfilename(parent=text_widget.winfo_toplevel(), defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")], initialfile=default_filename, title="Save Report As")
+        if not filepath: print("Save from report window cancelled."); return
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f: f.write(report_text)
+            print(f"Report saved from window to {filepath}"); messagebox.showinfo("Save Successful", f"Report saved to:\n{filepath}", parent=text_widget.winfo_toplevel())
+        except IOError as e: messagebox.showerror("File Error", f"Could not write report file: {e}", parent=text_widget.winfo_toplevel()); print(f"File error saving report from window: {e}")
+        except Exception as e: import traceback; print(f"Report saving error from window: {e}"); traceback.print_exc(); messagebox.showerror("Error", f"An unexpected error occurred during report saving: {e}", parent=text_widget.winfo_toplevel())
+
+# --- End of GameRecorderApp class ---
+
+
+# --- Main Execution ---
+if __name__ == "__main__":
+    print("Starting Scrabble Club Database Application...")
+    load_player_names() # Load player names first
+    setup_database()
+
+    # --- Generate Test Data (Conditional & Rating-Based) ---
+    generate_data_on_empty = True
+    force_generate_data = False # Set to True to add more data even if DB not empty
+    num_test_records = 500
+    try:
+        conn_check = sqlite3.connect(DB_NAME); cursor_check = conn_check.cursor()
+        cursor_check.execute("SELECT COUNT(*) FROM games"); count = cursor_check.fetchone()[0]; conn_check.close()
+        if count == 0:
+            print(f"Database '{DB_NAME}' is empty.")
+            if generate_data_on_empty:
+                print("Database is empty. Clearing any existing ratings file and generating initial test data...")
+                ratings_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), PLAYER_RATINGS_FILE)
+                if os.path.exists(ratings_file_path):
+                    try: os.remove(ratings_file_path); print(f"Removed existing ratings file: '{PLAYER_RATINGS_FILE}'")
+                    except OSError as e: print(f"Error removing ratings file '{PLAYER_RATINGS_FILE}': {e}")
+                generate_test_data(num_test_records)
+            else: print("Skipping automatic test data generation for empty database.")
+        else:
+            print(f"Database contains {count} records.")
+            print("Checking for new players needing ratings...")
+            current_ratings = load_player_ratings(); updated_ratings, changed = assign_initial_ratings(APP_PLAYER_LIST, current_ratings)
+            if changed: save_player_ratings(updated_ratings)
+        if force_generate_data: print(f"Forcing generation of {num_test_records} additional test records..."); generate_test_data(num_test_records)
+    except sqlite3.Error as e: print(f"Error checking database size or generating test data: {e}")
+    except Exception as e: import traceback; print(f"An unexpected error occurred during initial data check/generation setup: {e}"); traceback.print_exc()
+
+    # --- Create the main window and app instance ---
+    root = tk.Tk() # <<< DEFINE root FIRST
+    app = GameRecorderApp(root) # <<< THEN initialize the app
+
+    # --- Center the main window and set focus ---
+    root.update_idletasks() # Process geometry calculations
+    screen_width = root.winfo_screenwidth(); screen_height = root.winfo_screenheight()
+    window_width = root.winfo_width(); window_height = root.winfo_height()
+    if window_width > 0 and window_height > 0 :
+        center_x = int(screen_width / 2 - window_width / 2); center_y = int(screen_height / 2 - window_height / 2)
+        root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}'); print(f"Centering window ({window_width}x{window_height}) at ({center_x},{center_y})")
+    else: print("Warning: Window dimensions not available immediately for centering.")
+    root.focus_force() # Attempt to force focus
+
+    root.mainloop() # <<< Start the Tkinter event loop LAST
+    print("Application closed.")
+
+
+'''
+# --- Main Execution ---
+if __name__ == "__main__":
+    print("Starting Scrabble Club Database Application...")
+    load_player_names() # Load player names first
+    setup_database()
+
+    # --- Generate Test Data (Conditional & Rating-Based) ---
+    generate_data_on_empty = True
+    force_generate_data = False # Set to True to add more data even if DB not empty
+    num_test_records = 5000
+    try:
+        conn_check = sqlite3.connect(DB_NAME)
+        cursor_check = conn_check.cursor()
+        cursor_check.execute("SELECT COUNT(*) FROM games")
+        count = cursor_check.fetchone()[0]
+        conn_check.close() # Close check connection
+
+        if count == 0:
+            print(f"Database '{DB_NAME}' is empty.")
+            if generate_data_on_empty:
+                print("Database is empty. Clearing any existing ratings file and generating initial test data...")
+                # --- Delete ratings file for fresh start ---
+                ratings_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), PLAYER_RATINGS_FILE)
+                if os.path.exists(ratings_file_path):
+                    try:
+                        os.remove(ratings_file_path)
+                        print(f"Removed existing ratings file: '{PLAYER_RATINGS_FILE}'")
+                    except OSError as e:
+                        print(f"Error removing ratings file '{PLAYER_RATINGS_FILE}': {e}")
+                # --- Generate data ---
+                generate_test_data(num_test_records)
+            else:
+                print("Skipping automatic test data generation for empty database.")
+        else:
+            print(f"Database contains {count} records.")
+            # Optionally assign ratings to any *new* players added to player_list.txt
+            # without regenerating all data
+            print("Checking for new players needing ratings...")
+            current_ratings = load_player_ratings()
+            updated_ratings, changed = assign_initial_ratings(APP_PLAYER_LIST, current_ratings)
+            if changed:
+                save_player_ratings(updated_ratings)
+
+        # Force generation if flag is set
+        if force_generate_data:
+             print(f"Forcing generation of {num_test_records} additional test records...")
+             generate_test_data(num_test_records) # Will use existing/updated ratings
+
+    except sqlite3.Error as e:
+        print(f"Error checking database size or generating test data: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during initial data check/generation setup: {e}")
+    # ---------------------------------------------
+
+
+
+# --- Main Execution ---
+if __name__ == "__main__":
+    print("Starting Scrabble Club Database Application...")
+    load_player_names() # Load player names first
+    setup_database()
+
+    # --- Generate Test Data (Conditional & Rating-Based) ---
+    generate_data_on_empty = True
+    force_generate_data = False # Set to True to add more data even if DB not empty
+    num_test_records = 500
+    try:
+        conn_check = sqlite3.connect(DB_NAME)
+        cursor_check = conn_check.cursor()
+        cursor_check.execute("SELECT COUNT(*) FROM games")
+        count = cursor_check.fetchone()[0]
+        conn_check.close() # Close check connection
+
+        if count == 0:
+            print(f"Database '{DB_NAME}' is empty.")
+            if generate_data_on_empty:
+                print("Database is empty. Clearing any existing ratings file and generating initial test data...")
+                # --- Delete ratings file for fresh start ---
+                ratings_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), PLAYER_RATINGS_FILE)
+                if os.path.exists(ratings_file_path):
+                    try:
+                        os.remove(ratings_file_path)
+                        print(f"Removed existing ratings file: '{PLAYER_RATINGS_FILE}'")
+                    except OSError as e:
+                        print(f"Error removing ratings file '{PLAYER_RATINGS_FILE}': {e}")
+                # --- Generate data ---
+                generate_test_data(num_test_records)
+            else:
+                print("Skipping automatic test data generation for empty database.")
+        else:
+            print(f"Database contains {count} records.")
+            # Optionally assign ratings to any *new* players added to player_list.txt
+            print("Checking for new players needing ratings...")
+            current_ratings = load_player_ratings()
+            updated_ratings, changed = assign_initial_ratings(APP_PLAYER_LIST, current_ratings)
+            if changed:
+                save_player_ratings(updated_ratings)
+
+        # Force generation if flag is set
+        if force_generate_data:
+             print(f"Forcing generation of {num_test_records} additional test records...")
+             generate_test_data(num_test_records) # Will use existing/updated ratings
+
+    except sqlite3.Error as e:
+        print(f"Error checking database size or generating test data: {e}")
+    except Exception as e:
+        import traceback # Import traceback here for detailed error
+        print(f"An unexpected error occurred during initial data check/generation setup: {e}")
+        traceback.print_exc() # Print detailed traceback
+    # ---------------------------------------------
+
+
+
+    # --- Create the main window and app instance ---
+    root = tk.Tk() # <<< DEFINE root FIRST
+    app = GameRecorderApp(root) # <<< THEN initialize the app
+
+    # --- Center the main window and set focus ---
+    root.update_idletasks() # Process geometry calculations
+
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    window_width = root.winfo_width()
+    window_height = root.winfo_height()
+
+    if window_width > 0 and window_height > 0 :
+        center_x = int(screen_width / 2 - window_width / 2)
+        center_y = int(screen_height / 2 - window_height / 2)
+        root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
+        print(f"Centering window ({window_width}x{window_height}) at ({center_x},{center_y})")
+    else:
+        print("Warning: Window dimensions not available immediately for centering.")
+
+    root.focus_force() # Attempt to force focus
+    # --- End centering and focus ---
+
+    root.mainloop() # <<< Start the Tkinter event loop LAST
+    print("Application closed.")
+
+'''
