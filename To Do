@@ -25,8 +25,6 @@ _________
 
 -- If blanks are recorded, all sorts of data. Average score with 0,1,2, W/L record with 0,1,2, etc. How much does score increase per blank?
 
--- Avg spread
-
 -- Show score by number of bingos. Caluclate, then, how much a bingo is worth.
 
 
@@ -82,6 +80,8 @@ _________
 -- Need option to either save to text file or open in window.
 
 -- List all bingos by a player along with their probability
+
+-- Avg spread
 
 
 
