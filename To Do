@@ -13,6 +13,7 @@ _________
 Data Entry
 _________
 
+-- Add duplicate checking
 
 Reports
 _________
@@ -39,8 +40,6 @@ Charts
 _________
 
 -- Histogram of bingos by quartile
-
--- Histogram of scores
 
 -- Running average of bingo prob by player?
 
@@ -82,6 +81,9 @@ _________
 -- List all bingos by a player along with their probability
 
 -- Avg spread
+
+-- Histogram of scores
+
 
 
 
