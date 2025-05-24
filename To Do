@@ -4,7 +4,7 @@
 Admin Tools
 _________
 
--- Need a way to upload new words lists, such as when NASPA updates the dictionary
+-- Need a way to upload new words lists, for when NASPA updates the dictionary
 
 -- When the program is deploayed, I will update it. The update MUST maintain the current db. How to?
 
@@ -26,12 +26,7 @@ _________
 
 -- If blanks are recorded, all sorts of data. Average score with 0,1,2, W/L record with 0,1,2, etc. How much does score increase per blank?
 
--- Show score by number of bingos. Caluclate, then, how much a bingo is worth.
-
-
-
-
-
+-- Change Highest to Lowest probability
 
 
 
@@ -93,6 +88,9 @@ _________
 -- Add duplicate checking
 
 -- Add Clear Fields button on record entry form
+
+-- Show score by number of bingos
+
 
 
 
