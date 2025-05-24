@@ -20,23 +20,38 @@ _________
 
 -- Need support for 9+-letter bingos
 
--- Head-to-head comparison of two players??
+-- Head-to-head comparison of two players?? Cage Match!
 
 -- Create a "Full Player Report" which has basically everything possible about that one player
 
+For any custom date range:
+
+Total Number of Games
+Win/Loss Record (Win %)
+Complete H2H records
+Average Score
+Highest Score
+Average Spread
+All Bingo Statistics available under Reports
+List Of All Games
+
+
 -- If blanks are recorded, all sorts of data. Average score with 0,1,2, W/L record with 0,1,2, etc. How much does score increase per blank?
 
--- Change Highest to Lowest probability
 
 
 
 
-Charts
+Charts/Graphs
 _________
 
 -- Running average of bingo prob by player?
 
 -- Add color to win/loss heatmap
+
+-- Add the ability to generate more than one graph at once, and then use arrows to move among the graphs. See Keep for Gemini's output on this.
+
+
 
 
 
@@ -90,6 +105,9 @@ _________
 -- Add Clear Fields button on record entry form
 
 -- Show score by number of bingos
+
+-- Change Highest to Lowest probability
+
 
 
 
