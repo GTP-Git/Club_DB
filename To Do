@@ -8,12 +8,12 @@ _________
 
 -- When the program is deploayed, I will update it. The update MUST maintain the current db. How to?
 
--- Button that reports total number of records
+
 
 Data Entry
 _________
 
--- Add duplicate checking
+
 
 Reports
 _________
@@ -39,11 +39,9 @@ _________
 Charts
 _________
 
--- Histogram of bingos by quartile
-
 -- Running average of bingo prob by player?
 
--- Scatterplot of bingos by prob by player(s)
+-- Add color to win/loss heatmap
 
 
 
@@ -83,6 +81,22 @@ _________
 -- Avg spread
 
 -- Histogram of scores
+
+-- Button that reports total number of records
+
+-- Search by record ID
+
+-- Scatterplot of bingos by prob by player(s)
+
+-- Histogram of bingos by quartile
+
+-- Add duplicate checking
+
+-- Add Clear Fields button on record entry form
+
+
+
+
 
 
 
