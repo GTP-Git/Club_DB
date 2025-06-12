@@ -6,7 +6,7 @@ _________
 
 -- Need a way to upload new words lists, for when NASPA updates the dictionary
 
--- When the program is deploayed, I will update it. The update MUST maintain the current db. How to?
+-- When the program is deployed, I will update it. The update MUST maintain the current db. How to?
 
 
 
@@ -18,9 +18,8 @@ _________
 Reports
 _________
 
--- Add an asterik* next to any bingo that is added as a phony
 
--- Need support for 9+-letter bingos
+-- Add an asterik* next to any bingo that is added as a phony
 
 -- Head-to-head comparison of two players?? Cage Match!
 
@@ -108,6 +107,12 @@ Highest Score
 Average Spread
 All Bingo Statistics available under Reports
 List Of All Games
+
+-- Added support for multiple concurrent record deletions
+
+-- Need support for 9+-letter bingos
+
+-- Under --- Highest 7-Letter Probability* ---, show which bingo it was
 
 
 
