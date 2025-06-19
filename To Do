@@ -25,7 +25,9 @@ _________
 
 -- If blanks are recorded, all sorts of data. Average score with 0,1,2, W/L record with 0,1,2, etc. How much does score increase per blank?
 
+-- Show measures of volatility, scoring or otherwise
 
+-- In Least-probably bingo report, show the word the record refers to.
 
 
 
