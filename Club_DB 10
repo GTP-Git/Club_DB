@@ -2,6 +2,8 @@
 
 # Club 20JUN25 V10
 #Added Contact Info for phone numbers and email addresses
+#Changed 7/8/9-Letter Bingo by Probability (Scatterplot) to y-axis Prob and x-axis # of occurences,
+#but not happy with the graph. Need a better method.
 
 import tkinter as tk
 from tkinter import ttk
@@ -1557,6 +1559,63 @@ class GameRecorderApp:
         
         bingo_data_points.sort(key=lambda x: (x['date'], x['word']))
         return bingo_data_points
+
+
+
+
+    def _calculate_bingo_frequency_by_index(self, records, player_focus, target_length):
+        """
+        Counts the frequency of each unique bingo of a specific length for a player or group.
+        Returns a list of dictionaries: [{'word': str, 'index': int, 'count': int}]
+        """
+        bingo_counts = defaultdict(int)
+        word_map = None
+        if target_length == 7: word_map = WORD_7_INDEX_MAP
+        elif target_length == 8: word_map = WORD_8_INDEX_MAP
+        elif target_length == 9: word_map = WORD_9_INDEX_MAP
+
+        if not word_map:
+            return []
+
+        for row in records:
+            try:
+                p1_name, p1_bingos_str = row[2], row[4]
+                p2_name, p2_bingos_str = row[5], row[7]
+            except IndexError:
+                continue
+
+            players_bingos_to_process = []
+            if player_focus:
+                if p1_name == player_focus: players_bingos_to_process.append(p1_bingos_str)
+                if p2_name == player_focus: players_bingos_to_process.append(p2_bingos_str)
+            else:
+                players_bingos_to_process.append(p1_bingos_str)
+                players_bingos_to_process.append(p2_bingos_str)
+
+            for current_player_bingos_str in players_bingos_to_process:
+                if current_player_bingos_str:
+                    bingos_from_db = [b.strip().upper() for b in current_player_bingos_str.replace(',', ' ').split() if b.strip()]
+                    for bingo_word in bingos_from_db:
+                        if bingo_word in word_map:
+                            bingo_counts[bingo_word] += 1
+        
+        # Transform the counted data into the desired list format
+        result_list = []
+        for word, count in bingo_counts.items():
+            result_list.append({
+                'word': word,
+                'index': word_map[word],
+                'count': count
+            })
+            
+        return result_list
+
+
+
+
+
+
+    
 
 
     def _calculate_bingos_by_quartile_data(self, records, player_focus, target_length):
@@ -3939,13 +3998,13 @@ class GameRecorderApp:
 
 
     def show_7_letter_bingo_probability_scatterplot(self, start_date=None, end_date=None, player_focus=None):
-        """Graph: 7-Letter Bingos by Probability Index (Scatter Plot). Supports single player or group analysis."""
+        """Graph: Frequency of 7-Letter Bingos by Probability Index (Scatter Plot)."""
         BINGO_LENGTH = 7
-        if not self._check_graph_deps(require_numpy=True):
+        if not self._check_graph_deps():
             return
 
         if not WORD_7_INDEX_MAP:
-            messagebox.showinfo("Data Unavailable", 
+            messagebox.showinfo("Data Unavailable",
                                 f"The {BINGO_LENGTH}-letter word list ('{FILE_7_LETTER}') is not loaded or is empty. Cannot generate this graph.",
                                 parent=self.root)
             self.status_label.config(text=f"{BINGO_LENGTH}-letter word list missing.", foreground="orange")
@@ -3953,30 +4012,26 @@ class GameRecorderApp:
 
         analysis_target_str = player_focus or "(All Players)"
         date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""
-        print(f"Generating '{BINGO_LENGTH}-Letter Bingos By Probability Scatterplot' for {analysis_target_str}{date_info}...")
-        self.status_label.config(text=f"Generating {BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str}...", foreground="blue")
+        print(f"Generating 'Frequency of {BINGO_LENGTH}-Letter Bingos' for {analysis_target_str}{date_info}...")
+        self.status_label.config(text=f"Generating {BINGO_LENGTH}-L Bingo Frequency graph for {analysis_target_str}...", foreground="blue")
 
         records = self._fetch_game_data(
             columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos",
-            order_by="game_date ASC, id ASC", 
             start_date=start_date,
             end_date=end_date,
-            player_name=player_focus 
+            player_name=player_focus
         )
 
-        if records is None:
-            self.status_label.config(text="Failed to fetch data for scatterplot.", foreground="red")
-            return
-        if not records:
+        if records is None or not records:
             messagebox.showinfo("No Data", f"No game records found for '{analysis_target_str}'{date_info}.", parent=self.root)
             self.status_label.config(text=f"No records for {analysis_target_str}.", foreground="blue")
             return
 
-        bingo_data = self._calculate_bingo_scatterplot_data_by_length(records, player_focus, BINGO_LENGTH)
+        bingo_data = self._calculate_bingo_frequency_by_index(records, player_focus, BINGO_LENGTH)
 
         if not bingo_data:
             messagebox.showinfo("No Bingo Data", f"No recognized {BINGO_LENGTH}-letter bingos found for '{analysis_target_str}' to plot{date_info}.", parent=self.root)
-            self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
+            self.status_label.config(text=f"No {BINGO_LENGTH}-L bingos for {analysis_target_str} scatterplot.", foreground="blue")
             return
 
         try:
@@ -3987,56 +4042,47 @@ class GameRecorderApp:
 
             plt.style.use('seaborn-v0_8-darkgrid')
             fig, ax = plt.subplots(figsize=(12, 7))
-            
-            ax.scatter(df['date'], df['index'], color='dodgerblue', alpha=0.7, edgecolors='w', linewidth=0.5)
 
-            ax.set_xlabel("Game Date")
-            ax.set_ylabel(f"{BINGO_LENGTH}-Letter Bingo Probability Index (Higher = Less Probable)")
-            title = f"{BINGO_LENGTH}-Letter Bingo Probability Index Over Time for {analysis_target_str}"
+            scatter = ax.scatter(x=df['index'], y=df['count'], c=df['count'], cmap='Greens', alpha=0.8, edgecolors='black', linewidth=0.5)
+
+            ax.set_xlabel("Bingo Probability Index (Higher = Less Probable)")
+            ax.set_ylabel("Number of Occurrences")
+            title = f"Frequency of {BINGO_LENGTH}-Letter Bingos by Probability for {analysis_target_str}"
             if date_info:
                 title += f"\n{date_info.strip()}"
             ax.set_title(title)
 
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=15, interval_multiples=True))
-            fig.autofmt_xdate(rotation=30, ha='right')
-            
-            if NUMPY_AVAILABLE and np and not df.empty and len(df['date'].unique()) > 1:
-                df['date_numeric'] = df['date'].map(datetime.toordinal)
-                
-                if df['date_numeric'].nunique() > 1:
-                    z = np.polyfit(df['date_numeric'], df['index'], 1)
-                    p = np.poly1d(z)
-                    ax.plot(df['date'], p(df['date_numeric']), "r--", linewidth=1.5, label="Trend")
-                    ax.legend(loc='best')
-                else:
-                    print(f"Not enough unique dates with {BINGO_LENGTH}-letter bingos to plot trend line.")
+            # Add a color bar to show the mapping of color to frequency
+            cbar = plt.colorbar(scatter, ax=ax)
+            cbar.set_label('Number of Times Played')
+
+            # Set y-axis to be integers since it's a count
+            ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+            ax.set_ylim(bottom=0) # Ensure y-axis starts at 0
 
             plt.grid(True, linestyle='--', alpha=0.6)
             plt.tight_layout()
             plt.show()
 
-            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} generated.", foreground="blue")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} displayed.")
+            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} generated.", foreground="blue")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} displayed.")
 
         except Exception as e:
-            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Scatterplot: {e}", parent=self.root)
+            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Frequency graph: {e}", parent=self.root)
             self.status_label.config(text=f"Scatterplot Error: {e}", foreground="red")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot error: {e}")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph error: {e}")
             import traceback
             traceback.print_exc()
-        finally:
-            pass
 
 
     def show_8_letter_bingo_probability_scatterplot(self, start_date=None, end_date=None, player_focus=None):
-        """Graph: 8-Letter Bingos by Probability Index (Scatter Plot). Supports single player or group analysis."""
+        """Graph: Frequency of 8-Letter Bingos by Probability Index (Scatter Plot)."""
         BINGO_LENGTH = 8
-        if not self._check_graph_deps(require_numpy=True): 
+        if not self._check_graph_deps():
             return
 
         if not WORD_8_INDEX_MAP:
-            messagebox.showinfo("Data Unavailable", 
+            messagebox.showinfo("Data Unavailable",
                                 f"The {BINGO_LENGTH}-letter word list ('{FILE_8_LETTER}') is not loaded or is empty. Cannot generate this graph.",
                                 parent=self.root)
             self.status_label.config(text=f"{BINGO_LENGTH}-letter word list missing.", foreground="orange")
@@ -4044,101 +4090,77 @@ class GameRecorderApp:
 
         analysis_target_str = player_focus or "(All Players)"
         date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""
-        print(f"Generating '{BINGO_LENGTH}-Letter Bingos By Probability Scatterplot' for {analysis_target_str}{date_info}...")
-        self.status_label.config(text=f"Generating {BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str}...", foreground="blue")
+        print(f"Generating 'Frequency of {BINGO_LENGTH}-Letter Bingos' for {analysis_target_str}{date_info}...")
+        self.status_label.config(text=f"Generating {BINGO_LENGTH}-L Bingo Frequency graph for {analysis_target_str}...", foreground="blue")
 
         records = self._fetch_game_data(
             columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos",
-            order_by="game_date ASC, id ASC", 
             start_date=start_date,
             end_date=end_date,
-            player_name=player_focus 
+            player_name=player_focus
         )
 
-        if records is None:
-            self.status_label.config(text="Failed to fetch data for scatterplot.", foreground="red")
-            return
-        if not records:
+        if records is None or not records:
             messagebox.showinfo("No Data", f"No game records found for '{analysis_target_str}'{date_info}.", parent=self.root)
             self.status_label.config(text=f"No records for {analysis_target_str}.", foreground="blue")
             return
 
-        bingo_data = self._calculate_bingo_scatterplot_data_by_length(records, player_focus, BINGO_LENGTH)
+        bingo_data = self._calculate_bingo_frequency_by_index(records, player_focus, BINGO_LENGTH)
 
         if not bingo_data:
             messagebox.showinfo("No Bingo Data", f"No recognized {BINGO_LENGTH}-letter bingos found for '{analysis_target_str}' to plot{date_info}.", parent=self.root)
-            self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
+            self.status_label.config(text=f"No {BINGO_LENGTH}-L bingos for {analysis_target_str} scatterplot.", foreground="blue")
             return
 
         try:
             df = pd.DataFrame(bingo_data)
-            if df.empty: 
+            if df.empty:
                 messagebox.showinfo("No Bingo Data", f"No valid {BINGO_LENGTH}-letter bingo data to plot for '{analysis_target_str}'{date_info}.", parent=self.root)
-                self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
                 return
 
             plt.style.use('seaborn-v0_8-darkgrid')
             fig, ax = plt.subplots(figsize=(12, 7))
-            
-            ax.scatter(df['date'], df['index'], color='mediumseagreen', alpha=0.7, edgecolors='w', linewidth=0.5)
 
-            ax.set_xlabel("Game Date")
-            ax.set_ylabel(f"{BINGO_LENGTH}-Letter Bingo Probability Index (Higher = Less Probable)")
-            title = f"{BINGO_LENGTH}-Letter Bingo Probability Index Over Time for {analysis_target_str}"
+            scatter = ax.scatter(x=df['index'], y=df['count'], c=df['count'], cmap='Greens', alpha=0.8, edgecolors='black', linewidth=0.5)
+
+            ax.set_xlabel("Bingo Probability Index (Higher = Less Probable)")
+            ax.set_ylabel("Number of Occurrences")
+            title = f"Frequency of {BINGO_LENGTH}-Letter Bingos by Probability for {analysis_target_str}"
             if date_info:
                 title += f"\n{date_info.strip()}"
             ax.set_title(title)
 
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=15, interval_multiples=True))
-            fig.autofmt_xdate(rotation=30, ha='right')
-            
-            legend_handles = [plt.Line2D([0], [0], marker='o', color='w', label=f'{BINGO_LENGTH}-Letter Bingos', 
-                                          markerfacecolor='mediumseagreen', markersize=8, markeredgecolor='black')]
+            cbar = plt.colorbar(scatter, ax=ax)
+            cbar.set_label('Number of Times Played')
 
-            if NUMPY_AVAILABLE and np and not df.empty:
-                df_trend = df.dropna(subset=['date', 'index']).copy()
-                if not df_trend.empty:
-                    df_trend['date_numeric'] = pd.to_datetime(df_trend['date']).map(datetime.toordinal)
-                
-                    if len(df_trend['date_numeric'].unique()) > 1:
-                        z = np.polyfit(df_trend['date_numeric'], df_trend['index'], 1)
-                        p = np.poly1d(z)
-                        ax.plot(df_trend['date'], p(df_trend['date_numeric']), "r--", linewidth=1.5, label="Trend")
-                        legend_handles.append(plt.Line2D([0], [0], color='red', linestyle='--', linewidth=1.5, label='Trend'))
-                    else:
-                        print(f"Not enough unique dates with {BINGO_LENGTH}-letter bingos to plot trend line.")
-            
-            if legend_handles:
-                ax.legend(handles=legend_handles, loc='best')
+            ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+            ax.set_ylim(bottom=0)
 
             plt.grid(True, linestyle='--', alpha=0.6)
             plt.tight_layout()
             plt.show()
 
-            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} generated.", foreground="blue")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} displayed.")
+            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} generated.", foreground="blue")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} displayed.")
 
         except Exception as e:
-            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Scatterplot: {e}", parent=self.root)
+            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Frequency graph: {e}", parent=self.root)
             self.status_label.config(text=f"Scatterplot Error: {e}", foreground="red")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot error: {e}")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph error: {e}")
             import traceback
             traceback.print_exc()
-        finally:
-            pass
 
 
 
 
     def show_9_letter_bingo_probability_scatterplot(self, start_date=None, end_date=None, player_focus=None):
-        """Graph: 9-Letter Bingos by Probability Index (Scatter Plot). Supports single player or group analysis."""
+        """Graph: Frequency of 9-Letter Bingos by Probability Index (Scatter Plot)."""
         BINGO_LENGTH = 9
-        if not self._check_graph_deps(require_numpy=True): 
+        if not self._check_graph_deps():
             return
 
         if not WORD_9_INDEX_MAP:
-            messagebox.showinfo("Data Unavailable", 
+            messagebox.showinfo("Data Unavailable",
                                 f"The {BINGO_LENGTH}-letter word list ('{FILE_9_LETTER}') is not loaded or is empty. Cannot generate this graph.",
                                 parent=self.root)
             self.status_label.config(text=f"{BINGO_LENGTH}-letter word list missing.", foreground="orange")
@@ -4146,89 +4168,65 @@ class GameRecorderApp:
 
         analysis_target_str = player_focus or "(All Players)"
         date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""
-        print(f"Generating '{BINGO_LENGTH}-Letter Bingos By Probability Scatterplot' for {analysis_target_str}{date_info}...")
-        self.status_label.config(text=f"Generating {BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str}...", foreground="blue")
+        print(f"Generating 'Frequency of {BINGO_LENGTH}-Letter Bingos' for {analysis_target_str}{date_info}...")
+        self.status_label.config(text=f"Generating {BINGO_LENGTH}-L Bingo Frequency graph for {analysis_target_str}...", foreground="blue")
 
         records = self._fetch_game_data(
             columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos",
-            order_by="game_date ASC, id ASC", 
             start_date=start_date,
             end_date=end_date,
-            player_name=player_focus 
+            player_name=player_focus
         )
 
-        if records is None:
-            self.status_label.config(text="Failed to fetch data for scatterplot.", foreground="red")
-            return
-        if not records:
+        if records is None or not records:
             messagebox.showinfo("No Data", f"No game records found for '{analysis_target_str}'{date_info}.", parent=self.root)
             self.status_label.config(text=f"No records for {analysis_target_str}.", foreground="blue")
             return
 
-        bingo_data = self._calculate_bingo_scatterplot_data_by_length(records, player_focus, BINGO_LENGTH)
+        bingo_data = self._calculate_bingo_frequency_by_index(records, player_focus, BINGO_LENGTH)
 
         if not bingo_data:
             messagebox.showinfo("No Bingo Data", f"No recognized {BINGO_LENGTH}-letter bingos found for '{analysis_target_str}' to plot{date_info}.", parent=self.root)
-            self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
+            self.status_label.config(text=f"No {BINGO_LENGTH}-L bingos for {analysis_target_str} scatterplot.", foreground="blue")
             return
 
         try:
             df = pd.DataFrame(bingo_data)
-            if df.empty: 
+            if df.empty:
                 messagebox.showinfo("No Bingo Data", f"No valid {BINGO_LENGTH}-letter bingo data to plot for '{analysis_target_str}'{date_info}.", parent=self.root)
-                self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
                 return
 
             plt.style.use('seaborn-v0_8-darkgrid')
             fig, ax = plt.subplots(figsize=(12, 7))
-            
-            ax.scatter(df['date'], df['index'], color='darkmagenta', alpha=0.7, edgecolors='w', linewidth=0.5)
 
-            ax.set_xlabel("Game Date")
-            ax.set_ylabel(f"{BINGO_LENGTH}-Letter Bingo Probability Index (Higher = Less Probable)")
-            title = f"{BINGO_LENGTH}-Letter Bingo Probability Index Over Time for {analysis_target_str}"
+            scatter = ax.scatter(x=df['index'], y=df['count'], c=df['count'], cmap='Greens', alpha=0.8, edgecolors='black', linewidth=0.5)
+
+            ax.set_xlabel("Bingo Probability Index (Higher = Less Probable)")
+            ax.set_ylabel("Number of Occurrences")
+            title = f"Frequency of {BINGO_LENGTH}-Letter Bingos by Probability for {analysis_target_str}"
             if date_info:
                 title += f"\n{date_info.strip()}"
             ax.set_title(title)
 
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=15, interval_multiples=True))
-            fig.autofmt_xdate(rotation=30, ha='right')
-            
-            legend_handles = [plt.Line2D([0], [0], marker='o', color='w', label=f'{BINGO_LENGTH}-Letter Bingos', 
-                                          markerfacecolor='darkmagenta', markersize=8, markeredgecolor='black')]
+            cbar = plt.colorbar(scatter, ax=ax)
+            cbar.set_label('Number of Times Played')
 
-            if NUMPY_AVAILABLE and np and not df.empty:
-                df_trend = df.dropna(subset=['date', 'index']).copy()
-                if not df_trend.empty:
-                    df_trend['date_numeric'] = pd.to_datetime(df_trend['date']).map(datetime.toordinal)
-                
-                    if len(df_trend['date_numeric'].unique()) > 1:
-                        z = np.polyfit(df_trend['date_numeric'], df_trend['index'], 1)
-                        p = np.poly1d(z)
-                        ax.plot(df_trend['date'], p(df_trend['date_numeric']), "r--", linewidth=1.5, label="Trend")
-                        legend_handles.append(plt.Line2D([0], [0], color='red', linestyle='--', linewidth=1.5, label='Trend'))
-                    else:
-                        print(f"Not enough unique dates with {BINGO_LENGTH}-letter bingos to plot trend line.")
-            
-            if legend_handles:
-                ax.legend(handles=legend_handles, loc='best')
+            ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+            ax.set_ylim(bottom=0)
 
             plt.grid(True, linestyle='--', alpha=0.6)
             plt.tight_layout()
             plt.show()
 
-            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} generated.", foreground="blue")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} displayed.")
+            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} generated.", foreground="blue")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} displayed.")
 
         except Exception as e:
-            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Scatterplot: {e}", parent=self.root)
+            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Frequency graph: {e}", parent=self.root)
             self.status_label.config(text=f"Scatterplot Error: {e}", foreground="red")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot error: {e}")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph error: {e}")
             import traceback
             traceback.print_exc()
-        finally:
-            pass
 
 
 
