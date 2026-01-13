@@ -1,8 +1,8 @@
 
 
-# Club 12JUN25 V9
-#Added support for multiple concurrent record deletions
-#Added support for 9-letter bingos
+# Club 31JUL25 V11
+# Changed bingo graph to straight 
+
 
 import tkinter as tk
 from tkinter import ttk
@@ -293,6 +293,18 @@ def setup_database():
                 # but typically it's safe.
                 print(f"Warning: Could not add 'game_comment' column automatically: {e}")
                 print("If you are upgrading, you might need to add this column manually or recreate the DB.")
+
+        # --- Create player_contacts table ---
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS player_contacts (
+                player_name TEXT PRIMARY KEY NOT NULL,
+                phone TEXT,
+                email TEXT
+            )
+        ''')
+        conn.commit()
+        print("Checked/created 'player_contacts' table.")
+
 
         print(f"Database '{DB_NAME}' setup complete.")
     except sqlite3.Error as e:
@@ -1546,6 +1558,63 @@ class GameRecorderApp:
         
         bingo_data_points.sort(key=lambda x: (x['date'], x['word']))
         return bingo_data_points
+
+
+
+
+    def _calculate_bingo_frequency_by_index(self, records, player_focus, target_length):
+        """
+        Counts the frequency of each unique bingo of a specific length for a player or group.
+        Returns a list of dictionaries: [{'word': str, 'index': int, 'count': int}]
+        """
+        bingo_counts = defaultdict(int)
+        word_map = None
+        if target_length == 7: word_map = WORD_7_INDEX_MAP
+        elif target_length == 8: word_map = WORD_8_INDEX_MAP
+        elif target_length == 9: word_map = WORD_9_INDEX_MAP
+
+        if not word_map:
+            return []
+
+        for row in records:
+            try:
+                p1_name, p1_bingos_str = row[2], row[4]
+                p2_name, p2_bingos_str = row[5], row[7]
+            except IndexError:
+                continue
+
+            players_bingos_to_process = []
+            if player_focus:
+                if p1_name == player_focus: players_bingos_to_process.append(p1_bingos_str)
+                if p2_name == player_focus: players_bingos_to_process.append(p2_bingos_str)
+            else:
+                players_bingos_to_process.append(p1_bingos_str)
+                players_bingos_to_process.append(p2_bingos_str)
+
+            for current_player_bingos_str in players_bingos_to_process:
+                if current_player_bingos_str:
+                    bingos_from_db = [b.strip().upper() for b in current_player_bingos_str.replace(',', ' ').split() if b.strip()]
+                    for bingo_word in bingos_from_db:
+                        if bingo_word in word_map:
+                            bingo_counts[bingo_word] += 1
+        
+        # Transform the counted data into the desired list format
+        result_list = []
+        for word, count in bingo_counts.items():
+            result_list.append({
+                'word': word,
+                'index': word_map[word],
+                'count': count
+            })
+            
+        return result_list
+
+
+
+
+
+
+    
 
 
     def _calculate_bingos_by_quartile_data(self, records, player_focus, target_length):
@@ -3058,20 +3127,67 @@ class GameRecorderApp:
         self.status_label.config(text=f"Player '{new_name}' added.", foreground="blue"); messagebox.showinfo("Player Added", f"Player '{new_name}' added successfully.", parent=parent_window); print(f"Player '{new_name}' added.")
 
     def open_view_players_window(self):
-        """Opens a window to display the current list of players."""
+        """Opens a window to display the current list of players with their contact info."""
         parent_window = self.admin_main_dialog if hasattr(self, 'admin_main_dialog') and self.admin_main_dialog.winfo_exists() else self.root
-        view_window = tk.Toplevel(parent_window); view_window.title("Current Player List"); view_window.geometry("300x400"); view_window.transient(parent_window)
-        main_frame = ttk.Frame(view_window, padding="10"); main_frame.pack(expand=True, fill=tk.BOTH)
-        list_frame = ttk.Frame(main_frame); list_frame.pack(expand=True, fill=tk.BOTH, pady=(0, 10))
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL); scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        player_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, height=15); player_listbox.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
-        scrollbar.config(command=player_listbox.yview)
+        
+        view_window = tk.Toplevel(parent_window)
+        view_window.title("Player List & Contact Info")
+        view_window.geometry("450x500") # Increased size for more info
+        view_window.transient(parent_window)
+        view_window.grab_set()
+
+        main_frame = ttk.Frame(view_window, padding="10")
+        main_frame.pack(expand=True, fill=tk.BOTH)
+
+        # Use a Text widget instead of a Listbox to handle multi-line entries
+        text_frame = ttk.Frame(main_frame)
+        text_frame.pack(expand=True, fill=tk.BOTH, pady=(0, 10))
+        
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL)
+        player_text_widget = tk.Text(text_frame, yscrollcommand=scrollbar.set, wrap='word', relief=tk.SUNKEN, borderwidth=1, font=("Helvetica", 11))
+        
+        scrollbar.config(command=player_text_widget.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        player_text_widget.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+
+        # Fetch all contact info at once
+        all_contacts = self._fetch_all_contact_info()
+
         if APP_PLAYER_LIST:
-            for player_name in APP_PLAYER_LIST: player_listbox.insert(tk.END, player_name)
-        else: player_listbox.insert(tk.END, "(No players loaded or added)")
+            for i, player_name in enumerate(APP_PLAYER_LIST):
+                contact_info = all_contacts.get(player_name, {})
+                phone = contact_info.get('phone', 'N/A') or 'N/A'
+                email = contact_info.get('email', 'N/A') or 'N/A'
+
+                # Format the entry as requested
+                entry_text = (
+                    f"{player_name}\n"
+                    f"Phone number: {phone}\n"
+                    f"Email: {email}\n"
+                )
+                
+                player_text_widget.insert(tk.END, entry_text)
+                
+                # Add a separator, but not after the last player
+                if i < len(APP_PLAYER_LIST) - 1:
+                    player_text_widget.insert(tk.END, "-"*50 + "\n")
+        else:
+            player_text_widget.insert(tk.END, "(No players loaded or added)")
+
+        # Make the text widget read-only
+        player_text_widget.config(state=tk.DISABLED)
+
         ttk.Button(main_frame, text="Close", command=view_window.destroy).pack()
-        view_window.update_idletasks(); px, py, pw, ph = parent_window.winfo_rootx(), parent_window.winfo_rooty(), parent_window.winfo_width(), parent_window.winfo_height()
-        vw, vh = view_window.winfo_width(), view_window.winfo_height(); x = px + (pw // 2) - (vw // 2); y = py + (ph // 2) - (vh // 2); view_window.geometry(f"+{x}+{y}")
+
+        # Center the window
+        view_window.update_idletasks()
+        px, py, pw, ph = parent_window.winfo_rootx(), parent_window.winfo_rooty(), parent_window.winfo_width(), parent_window.winfo_height()
+        vw, vh = view_window.winfo_width(), view_window.winfo_height()
+        x = px + (pw // 2) - (vw // 2)
+        y = py + (ph // 2) - (vh // 2)
+        view_window.geometry(f"+{x}+{y}")
+
+
 
 
     def open_admin_tools_dialog(self):
@@ -3082,8 +3198,9 @@ class GameRecorderApp:
             "search_view": "Search/View/Edit/Delete Records", 
             "add_player": "Add Player", 
             "view_players": "View Players", 
+            "add_contact_info": "Add Contact Info",
             "backup_db": "Backup Database",
-            "count_records": "Number Of Records"  # New action
+            "count_records": "Number Of Records"
         }
         current_row = 0
         for key, text in admin_actions.items():
@@ -3091,8 +3208,9 @@ class GameRecorderApp:
             if key == "search_view": button = ttk.Button(dialog_frame, text=text, command=self.open_search_view_window)
             elif key == "add_player": button = ttk.Button(dialog_frame, text=text, command=self._add_player)
             elif key == "view_players": button = ttk.Button(dialog_frame, text=text, command=self.open_view_players_window)
+            elif key == "add_contact_info": button = ttk.Button(dialog_frame, text=text, command=self.open_contact_info_dialog)
             elif key == "backup_db": button = ttk.Button(dialog_frame, text=text, command=self._backup_database)
-            elif key == "count_records": button = ttk.Button(dialog_frame, text=text, command=self._show_total_records_count) # New button command
+            elif key == "count_records": button = ttk.Button(dialog_frame, text=text, command=self._show_total_records_count)
             if button: button.grid(row=current_row, column=0, sticky=tk.EW, padx=10, pady=4)
             current_row += 1
         ttk.Separator(dialog_frame, orient=tk.HORIZONTAL).grid(row=current_row, column=0, sticky=tk.EW, pady=10, padx=5); current_row += 1
@@ -3137,6 +3255,175 @@ class GameRecorderApp:
         finally:
             if conn:
                 conn.close()
+
+
+
+    def _fetch_contact_info(self, player_name):
+        """Fetches contact info for a single player from the player_contacts table."""
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("SELECT phone, email FROM player_contacts WHERE player_name = ?", (player_name,))
+            return cursor.fetchone()  # Returns (phone, email) or None
+        except sqlite3.Error as e:
+            print(f"Error fetching contact info for {player_name}: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def open_contact_info_dialog(self):
+        """Opens a dialog to add or edit a player's contact information."""
+        parent_window = self.admin_main_dialog if hasattr(self, 'admin_main_dialog') and self.admin_main_dialog.winfo_exists() else self.root
+
+        contact_dialog = tk.Toplevel(parent_window)
+        contact_dialog.title("Add/Edit Player Contact Info")
+        contact_dialog.transient(parent_window)
+        contact_dialog.grab_set()  # Make modal
+
+        main_frame = ttk.Frame(contact_dialog, padding="15")
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        main_frame.columnconfigure(1, weight=1)
+
+        row_num = 0
+
+        # --- Widgets ---
+        ttk.Label(main_frame, text="Player:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=5)
+        player_combo = ttk.Combobox(main_frame, state='readonly', width=30, values=APP_PLAYER_LIST)
+        player_combo.grid(row=row_num, column=1, sticky="ew", padx=5, pady=5)
+        row_num += 1
+
+        ttk.Label(main_frame, text="Phone Number:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=5)
+        phone_var = tk.StringVar()
+        phone_entry = ttk.Entry(main_frame, textvariable=phone_var, width=30)
+        phone_entry.grid(row=row_num, column=1, sticky="ew", padx=5, pady=5)
+        row_num += 1
+
+        ttk.Label(main_frame, text="Email Address:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=5)
+        email_var = tk.StringVar()
+        email_entry = ttk.Entry(main_frame, textvariable=email_var, width=30)
+        email_entry.grid(row=row_num, column=1, sticky="ew", padx=5, pady=5)
+        row_num += 1
+
+        # --- Event Handling ---
+        def on_player_select(event):
+            """Callback to fetch and display contact info when a player is selected."""
+            selected_name = player_combo.get()
+            if not selected_name:
+                phone_var.set("")
+                email_var.set("")
+                return
+            
+            contact_data = self._fetch_contact_info(selected_name)
+            if contact_data:
+                phone, email = contact_data
+                phone_var.set(phone or "")
+                email_var.set(email or "")
+            else:
+                phone_var.set("")
+                email_var.set("")
+        
+        player_combo.bind("<<ComboboxSelected>>", on_player_select)
+
+        # --- Buttons ---
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=row_num, column=0, columnspan=2, pady=(15, 5))
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+
+        save_btn = ttk.Button(button_frame, text="Add Record", command=lambda: self._save_contact_info(
+            contact_dialog, player_combo.get(), phone_var.get(), email_var.get()
+        ))
+        save_btn.grid(row=0, column=0, padx=10, sticky=tk.E)
+
+        cancel_btn = ttk.Button(button_frame, text="Cancel", command=contact_dialog.destroy)
+        cancel_btn.grid(row=0, column=1, padx=10, sticky=tk.W)
+
+        contact_dialog.wait_window()
+
+    def _save_contact_info(self, dialog, player_name, phone_str, email_str):
+        """Validates and saves player contact information to the database."""
+        player_name = player_name.strip()
+        phone_str = phone_str.strip()
+        email_str = email_str.strip()
+
+        # 1. Validate Player Selection
+        if not player_name:
+            messagebox.showerror("Input Error", "You must select a player.", parent=dialog)
+            return
+
+        # 2. Validate Phone Number (allow empty)
+        phone_to_save = None
+        if phone_str:
+            digits_only = re.sub(r'\D', '', phone_str)
+            if len(digits_only) == 10:
+                phone_to_save = f"({digits_only[0:3]}) {digits_only[3:6]}-{digits_only[6:10]}"
+            else:
+                messagebox.showerror("Input Error", 
+                                     "Invalid phone number format.\nPlease enter a 10-digit number (e.g., 123-456-7890).", 
+                                     parent=dialog)
+                return
+
+        # 3. Validate Email Address (allow empty)
+        email_to_save = None
+        if email_str:
+            email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if re.match(email_regex, email_str):
+                email_to_save = email_str
+            else:
+                messagebox.showerror("Input Error", "Invalid email address format.", parent=dialog)
+                return
+
+        # 4. Save to Database
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO player_contacts (player_name, phone, email)
+                VALUES (?, ?, ?)
+            """, (player_name, phone_to_save, email_to_save))
+            conn.commit()
+
+            self.status_label.config(text=f"Contact info for {player_name} saved.", foreground="green")
+            print(f"Contact info for '{player_name}' saved/updated. Phone: {phone_to_save}, Email: {email_to_save}")
+            messagebox.showinfo("Success", f"Contact information for {player_name} has been saved.", parent=dialog.master)
+            dialog.destroy()
+
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Could not save contact info: {e}", parent=dialog)
+            self.status_label.config(text=f"DB Error saving contact info: {e}", foreground="red")
+            print(f"Database error saving contact info for {player_name}: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+
+
+
+    def _fetch_all_contact_info(self):
+        """Fetches all contact info from the player_contacts table."""
+        contacts = {}
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("SELECT player_name, phone, email FROM player_contacts")
+            for row in cursor.fetchall():
+                player_name, phone, email = row
+                contacts[player_name] = {'phone': phone, 'email': email}
+            return contacts
+        except sqlite3.Error as e:
+            print(f"Error fetching all contact info: {e}")
+            return {} # Return empty dict on error
+        finally:
+            if conn:
+                conn.close()
+
+
+
+
 
     def show_7_letter_bingos_by_quartile_graph(self, start_date=None, end_date=None, player_focus=None):
         """Graph: 7-Letter Bingos by Probability Quartile (Bar Chart). Supports single player or group analysis."""
@@ -3710,13 +3997,13 @@ class GameRecorderApp:
 
 
     def show_7_letter_bingo_probability_scatterplot(self, start_date=None, end_date=None, player_focus=None):
-        """Graph: 7-Letter Bingos by Probability Index (Scatter Plot). Supports single player or group analysis."""
+        """Graph: Frequency of 7-Letter Bingos by Probability Index (Scatter Plot)."""
         BINGO_LENGTH = 7
-        if not self._check_graph_deps(require_numpy=True):
+        if not self._check_graph_deps():
             return
 
         if not WORD_7_INDEX_MAP:
-            messagebox.showinfo("Data Unavailable", 
+            messagebox.showinfo("Data Unavailable",
                                 f"The {BINGO_LENGTH}-letter word list ('{FILE_7_LETTER}') is not loaded or is empty. Cannot generate this graph.",
                                 parent=self.root)
             self.status_label.config(text=f"{BINGO_LENGTH}-letter word list missing.", foreground="orange")
@@ -3724,30 +4011,26 @@ class GameRecorderApp:
 
         analysis_target_str = player_focus or "(All Players)"
         date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""
-        print(f"Generating '{BINGO_LENGTH}-Letter Bingos By Probability Scatterplot' for {analysis_target_str}{date_info}...")
-        self.status_label.config(text=f"Generating {BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str}...", foreground="blue")
+        print(f"Generating 'Frequency of {BINGO_LENGTH}-Letter Bingos' for {analysis_target_str}{date_info}...")
+        self.status_label.config(text=f"Generating {BINGO_LENGTH}-L Bingo Frequency graph for {analysis_target_str}...", foreground="blue")
 
         records = self._fetch_game_data(
             columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos",
-            order_by="game_date ASC, id ASC", 
             start_date=start_date,
             end_date=end_date,
-            player_name=player_focus 
+            player_name=player_focus
         )
 
-        if records is None:
-            self.status_label.config(text="Failed to fetch data for scatterplot.", foreground="red")
-            return
-        if not records:
+        if records is None or not records:
             messagebox.showinfo("No Data", f"No game records found for '{analysis_target_str}'{date_info}.", parent=self.root)
             self.status_label.config(text=f"No records for {analysis_target_str}.", foreground="blue")
             return
 
-        bingo_data = self._calculate_bingo_scatterplot_data_by_length(records, player_focus, BINGO_LENGTH)
+        bingo_data = self._calculate_bingo_frequency_by_index(records, player_focus, BINGO_LENGTH)
 
         if not bingo_data:
             messagebox.showinfo("No Bingo Data", f"No recognized {BINGO_LENGTH}-letter bingos found for '{analysis_target_str}' to plot{date_info}.", parent=self.root)
-            self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
+            self.status_label.config(text=f"No {BINGO_LENGTH}-L bingos for {analysis_target_str} scatterplot.", foreground="blue")
             return
 
         try:
@@ -3758,56 +4041,47 @@ class GameRecorderApp:
 
             plt.style.use('seaborn-v0_8-darkgrid')
             fig, ax = plt.subplots(figsize=(12, 7))
-            
-            ax.scatter(df['date'], df['index'], color='dodgerblue', alpha=0.7, edgecolors='w', linewidth=0.5)
 
-            ax.set_xlabel("Game Date")
-            ax.set_ylabel(f"{BINGO_LENGTH}-Letter Bingo Probability Index (Higher = Less Probable)")
-            title = f"{BINGO_LENGTH}-Letter Bingo Probability Index Over Time for {analysis_target_str}"
+            scatter = ax.scatter(x=df['index'], y=df['count'], c=df['count'], cmap='Greens', alpha=0.8, edgecolors='black', linewidth=0.5)
+
+            ax.set_xlabel("Bingo Probability Index (Higher = Less Probable)")
+            ax.set_ylabel("Number of Occurrences")
+            title = f"Frequency of {BINGO_LENGTH}-Letter Bingos by Probability for {analysis_target_str}"
             if date_info:
                 title += f"\n{date_info.strip()}"
             ax.set_title(title)
 
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=15, interval_multiples=True))
-            fig.autofmt_xdate(rotation=30, ha='right')
-            
-            if NUMPY_AVAILABLE and np and not df.empty and len(df['date'].unique()) > 1:
-                df['date_numeric'] = df['date'].map(datetime.toordinal)
-                
-                if df['date_numeric'].nunique() > 1:
-                    z = np.polyfit(df['date_numeric'], df['index'], 1)
-                    p = np.poly1d(z)
-                    ax.plot(df['date'], p(df['date_numeric']), "r--", linewidth=1.5, label="Trend")
-                    ax.legend(loc='best')
-                else:
-                    print(f"Not enough unique dates with {BINGO_LENGTH}-letter bingos to plot trend line.")
+            # Add a color bar to show the mapping of color to frequency
+            cbar = plt.colorbar(scatter, ax=ax)
+            cbar.set_label('Number of Times Played')
+
+            # Set y-axis to be integers since it's a count
+            ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+            ax.set_ylim(bottom=0) # Ensure y-axis starts at 0
 
             plt.grid(True, linestyle='--', alpha=0.6)
             plt.tight_layout()
             plt.show()
 
-            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} generated.", foreground="blue")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} displayed.")
+            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} generated.", foreground="blue")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} displayed.")
 
         except Exception as e:
-            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Scatterplot: {e}", parent=self.root)
+            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Frequency graph: {e}", parent=self.root)
             self.status_label.config(text=f"Scatterplot Error: {e}", foreground="red")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot error: {e}")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph error: {e}")
             import traceback
             traceback.print_exc()
-        finally:
-            pass
 
 
     def show_8_letter_bingo_probability_scatterplot(self, start_date=None, end_date=None, player_focus=None):
-        """Graph: 8-Letter Bingos by Probability Index (Scatter Plot). Supports single player or group analysis."""
+        """Graph: Frequency of 8-Letter Bingos by Probability Index (Scatter Plot)."""
         BINGO_LENGTH = 8
-        if not self._check_graph_deps(require_numpy=True): 
+        if not self._check_graph_deps():
             return
 
         if not WORD_8_INDEX_MAP:
-            messagebox.showinfo("Data Unavailable", 
+            messagebox.showinfo("Data Unavailable",
                                 f"The {BINGO_LENGTH}-letter word list ('{FILE_8_LETTER}') is not loaded or is empty. Cannot generate this graph.",
                                 parent=self.root)
             self.status_label.config(text=f"{BINGO_LENGTH}-letter word list missing.", foreground="orange")
@@ -3815,101 +4089,77 @@ class GameRecorderApp:
 
         analysis_target_str = player_focus or "(All Players)"
         date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""
-        print(f"Generating '{BINGO_LENGTH}-Letter Bingos By Probability Scatterplot' for {analysis_target_str}{date_info}...")
-        self.status_label.config(text=f"Generating {BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str}...", foreground="blue")
+        print(f"Generating 'Frequency of {BINGO_LENGTH}-Letter Bingos' for {analysis_target_str}{date_info}...")
+        self.status_label.config(text=f"Generating {BINGO_LENGTH}-L Bingo Frequency graph for {analysis_target_str}...", foreground="blue")
 
         records = self._fetch_game_data(
             columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos",
-            order_by="game_date ASC, id ASC", 
             start_date=start_date,
             end_date=end_date,
-            player_name=player_focus 
+            player_name=player_focus
         )
 
-        if records is None:
-            self.status_label.config(text="Failed to fetch data for scatterplot.", foreground="red")
-            return
-        if not records:
+        if records is None or not records:
             messagebox.showinfo("No Data", f"No game records found for '{analysis_target_str}'{date_info}.", parent=self.root)
             self.status_label.config(text=f"No records for {analysis_target_str}.", foreground="blue")
             return
 
-        bingo_data = self._calculate_bingo_scatterplot_data_by_length(records, player_focus, BINGO_LENGTH)
+        bingo_data = self._calculate_bingo_frequency_by_index(records, player_focus, BINGO_LENGTH)
 
         if not bingo_data:
             messagebox.showinfo("No Bingo Data", f"No recognized {BINGO_LENGTH}-letter bingos found for '{analysis_target_str}' to plot{date_info}.", parent=self.root)
-            self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
+            self.status_label.config(text=f"No {BINGO_LENGTH}-L bingos for {analysis_target_str} scatterplot.", foreground="blue")
             return
 
         try:
             df = pd.DataFrame(bingo_data)
-            if df.empty: 
+            if df.empty:
                 messagebox.showinfo("No Bingo Data", f"No valid {BINGO_LENGTH}-letter bingo data to plot for '{analysis_target_str}'{date_info}.", parent=self.root)
-                self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
                 return
 
             plt.style.use('seaborn-v0_8-darkgrid')
             fig, ax = plt.subplots(figsize=(12, 7))
-            
-            ax.scatter(df['date'], df['index'], color='mediumseagreen', alpha=0.7, edgecolors='w', linewidth=0.5)
 
-            ax.set_xlabel("Game Date")
-            ax.set_ylabel(f"{BINGO_LENGTH}-Letter Bingo Probability Index (Higher = Less Probable)")
-            title = f"{BINGO_LENGTH}-Letter Bingo Probability Index Over Time for {analysis_target_str}"
+            scatter = ax.scatter(x=df['index'], y=df['count'], c=df['count'], cmap='Greens', alpha=0.8, edgecolors='black', linewidth=0.5)
+
+            ax.set_xlabel("Bingo Probability Index (Higher = Less Probable)")
+            ax.set_ylabel("Number of Occurrences")
+            title = f"Frequency of {BINGO_LENGTH}-Letter Bingos by Probability for {analysis_target_str}"
             if date_info:
                 title += f"\n{date_info.strip()}"
             ax.set_title(title)
 
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=15, interval_multiples=True))
-            fig.autofmt_xdate(rotation=30, ha='right')
-            
-            legend_handles = [plt.Line2D([0], [0], marker='o', color='w', label=f'{BINGO_LENGTH}-Letter Bingos', 
-                                          markerfacecolor='mediumseagreen', markersize=8, markeredgecolor='black')]
+            cbar = plt.colorbar(scatter, ax=ax)
+            cbar.set_label('Number of Times Played')
 
-            if NUMPY_AVAILABLE and np and not df.empty:
-                df_trend = df.dropna(subset=['date', 'index']).copy()
-                if not df_trend.empty:
-                    df_trend['date_numeric'] = pd.to_datetime(df_trend['date']).map(datetime.toordinal)
-                
-                    if len(df_trend['date_numeric'].unique()) > 1:
-                        z = np.polyfit(df_trend['date_numeric'], df_trend['index'], 1)
-                        p = np.poly1d(z)
-                        ax.plot(df_trend['date'], p(df_trend['date_numeric']), "r--", linewidth=1.5, label="Trend")
-                        legend_handles.append(plt.Line2D([0], [0], color='red', linestyle='--', linewidth=1.5, label='Trend'))
-                    else:
-                        print(f"Not enough unique dates with {BINGO_LENGTH}-letter bingos to plot trend line.")
-            
-            if legend_handles:
-                ax.legend(handles=legend_handles, loc='best')
+            ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+            ax.set_ylim(bottom=0)
 
             plt.grid(True, linestyle='--', alpha=0.6)
             plt.tight_layout()
             plt.show()
 
-            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} generated.", foreground="blue")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} displayed.")
+            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} generated.", foreground="blue")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} displayed.")
 
         except Exception as e:
-            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Scatterplot: {e}", parent=self.root)
+            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Frequency graph: {e}", parent=self.root)
             self.status_label.config(text=f"Scatterplot Error: {e}", foreground="red")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot error: {e}")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph error: {e}")
             import traceback
             traceback.print_exc()
-        finally:
-            pass
 
 
 
 
     def show_9_letter_bingo_probability_scatterplot(self, start_date=None, end_date=None, player_focus=None):
-        """Graph: 9-Letter Bingos by Probability Index (Scatter Plot). Supports single player or group analysis."""
+        """Graph: Frequency of 9-Letter Bingos by Probability Index (Scatter Plot)."""
         BINGO_LENGTH = 9
-        if not self._check_graph_deps(require_numpy=True): 
+        if not self._check_graph_deps():
             return
 
         if not WORD_9_INDEX_MAP:
-            messagebox.showinfo("Data Unavailable", 
+            messagebox.showinfo("Data Unavailable",
                                 f"The {BINGO_LENGTH}-letter word list ('{FILE_9_LETTER}') is not loaded or is empty. Cannot generate this graph.",
                                 parent=self.root)
             self.status_label.config(text=f"{BINGO_LENGTH}-letter word list missing.", foreground="orange")
@@ -3917,89 +4167,65 @@ class GameRecorderApp:
 
         analysis_target_str = player_focus or "(All Players)"
         date_info = f" ({start_date or 'Start'} to {end_date or 'End'})" if start_date or end_date else ""
-        print(f"Generating '{BINGO_LENGTH}-Letter Bingos By Probability Scatterplot' for {analysis_target_str}{date_info}...")
-        self.status_label.config(text=f"Generating {BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str}...", foreground="blue")
+        print(f"Generating 'Frequency of {BINGO_LENGTH}-Letter Bingos' for {analysis_target_str}{date_info}...")
+        self.status_label.config(text=f"Generating {BINGO_LENGTH}-L Bingo Frequency graph for {analysis_target_str}...", foreground="blue")
 
         records = self._fetch_game_data(
             columns="id, game_date, player1_name, player1_score, player1_bingos, player2_name, player2_score, player2_bingos",
-            order_by="game_date ASC, id ASC", 
             start_date=start_date,
             end_date=end_date,
-            player_name=player_focus 
+            player_name=player_focus
         )
 
-        if records is None:
-            self.status_label.config(text="Failed to fetch data for scatterplot.", foreground="red")
-            return
-        if not records:
+        if records is None or not records:
             messagebox.showinfo("No Data", f"No game records found for '{analysis_target_str}'{date_info}.", parent=self.root)
             self.status_label.config(text=f"No records for {analysis_target_str}.", foreground="blue")
             return
 
-        bingo_data = self._calculate_bingo_scatterplot_data_by_length(records, player_focus, BINGO_LENGTH)
+        bingo_data = self._calculate_bingo_frequency_by_index(records, player_focus, BINGO_LENGTH)
 
         if not bingo_data:
             messagebox.showinfo("No Bingo Data", f"No recognized {BINGO_LENGTH}-letter bingos found for '{analysis_target_str}' to plot{date_info}.", parent=self.root)
-            self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
+            self.status_label.config(text=f"No {BINGO_LENGTH}-L bingos for {analysis_target_str} scatterplot.", foreground="blue")
             return
 
         try:
             df = pd.DataFrame(bingo_data)
-            if df.empty: 
+            if df.empty:
                 messagebox.showinfo("No Bingo Data", f"No valid {BINGO_LENGTH}-letter bingo data to plot for '{analysis_target_str}'{date_info}.", parent=self.root)
-                self.status_label.config(text=f"No {BINGO_LENGTH}-letter bingos for {analysis_target_str} scatterplot.", foreground="blue")
                 return
 
             plt.style.use('seaborn-v0_8-darkgrid')
             fig, ax = plt.subplots(figsize=(12, 7))
-            
-            ax.scatter(df['date'], df['index'], color='darkmagenta', alpha=0.7, edgecolors='w', linewidth=0.5)
 
-            ax.set_xlabel("Game Date")
-            ax.set_ylabel(f"{BINGO_LENGTH}-Letter Bingo Probability Index (Higher = Less Probable)")
-            title = f"{BINGO_LENGTH}-Letter Bingo Probability Index Over Time for {analysis_target_str}"
+            scatter = ax.scatter(x=df['index'], y=df['count'], c=df['count'], cmap='Greens', alpha=0.8, edgecolors='black', linewidth=0.5)
+
+            ax.set_xlabel("Bingo Probability Index (Higher = Less Probable)")
+            ax.set_ylabel("Number of Occurrences")
+            title = f"Frequency of {BINGO_LENGTH}-Letter Bingos by Probability for {analysis_target_str}"
             if date_info:
                 title += f"\n{date_info.strip()}"
             ax.set_title(title)
 
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=15, interval_multiples=True))
-            fig.autofmt_xdate(rotation=30, ha='right')
-            
-            legend_handles = [plt.Line2D([0], [0], marker='o', color='w', label=f'{BINGO_LENGTH}-Letter Bingos', 
-                                          markerfacecolor='darkmagenta', markersize=8, markeredgecolor='black')]
+            cbar = plt.colorbar(scatter, ax=ax)
+            cbar.set_label('Number of Times Played')
 
-            if NUMPY_AVAILABLE and np and not df.empty:
-                df_trend = df.dropna(subset=['date', 'index']).copy()
-                if not df_trend.empty:
-                    df_trend['date_numeric'] = pd.to_datetime(df_trend['date']).map(datetime.toordinal)
-                
-                    if len(df_trend['date_numeric'].unique()) > 1:
-                        z = np.polyfit(df_trend['date_numeric'], df_trend['index'], 1)
-                        p = np.poly1d(z)
-                        ax.plot(df_trend['date'], p(df_trend['date_numeric']), "r--", linewidth=1.5, label="Trend")
-                        legend_handles.append(plt.Line2D([0], [0], color='red', linestyle='--', linewidth=1.5, label='Trend'))
-                    else:
-                        print(f"Not enough unique dates with {BINGO_LENGTH}-letter bingos to plot trend line.")
-            
-            if legend_handles:
-                ax.legend(handles=legend_handles, loc='best')
+            ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+            ax.set_ylim(bottom=0)
 
             plt.grid(True, linestyle='--', alpha=0.6)
             plt.tight_layout()
             plt.show()
 
-            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} generated.", foreground="blue")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot for {analysis_target_str} displayed.")
+            self.status_label.config(text=f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} generated.", foreground="blue")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph for {analysis_target_str} displayed.")
 
         except Exception as e:
-            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Scatterplot: {e}", parent=self.root)
+            messagebox.showerror("Graphing Error", f"Error generating {BINGO_LENGTH}-Letter Bingo Frequency graph: {e}", parent=self.root)
             self.status_label.config(text=f"Scatterplot Error: {e}", foreground="red")
-            print(f"{BINGO_LENGTH}-Letter Bingo Scatterplot error: {e}")
+            print(f"{BINGO_LENGTH}-Letter Bingo Frequency graph error: {e}")
             import traceback
             traceback.print_exc()
-        finally:
-            pass
 
 
 
